@@ -1,0 +1,26 @@
+{
+  "name": "tempo",
+  "version": "1.0.0",
+  "description": "Tempo: study in rhythm",
+  "author": "Tempo",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node tests/logic.test.js && node tests/games.test.js",
+    "icon": "electron electron/make-icon.js",
+    "dist": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^45.3.3",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "app.tempo.study",
+    "productName": "Tempo",
+    "files": ["index.html", "css/**", "js/**", "wallpaper/**", "electron/main.js"],
+    "directories": { "output": "dist" },
+    "win": { "target": [{ "target": "portable", "arch": ["x64"] }], "icon": "build/icon.png" },
+    "portable": { "artifactName": "Tempo.exe" }
+  }
+}
