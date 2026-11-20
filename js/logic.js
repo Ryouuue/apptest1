@@ -193,27 +193,152 @@
     { id: 'frog', e: '🐸', n: 'Frog eater', d: 'Finish the frog of the day before noon 3 times', ok: s => s.frogs >= 3 },
   ];
 
-  // ----- markdown (escape first: note bodies and AI replies are untrusted) -----
-  function md(src) {
-    const inl = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
-      .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>').replace(/\[\[([^\]]+)\]\]/g, '<a class="wl" data-act="wikilink" data-t="$1">$1</a>');
-    let out = '', list = '', code = false;
-    const close = () => { if (list) { out += `</${list}>`; list = ''; } };
-    for (const line of String(src || '').split('\n')) {
-      let m;
-      if (line.startsWith('```')) { close(); out += code ? '</pre>' : '<pre>'; code = !code; }
-      else if (code) out += esc(line) + '\n';
-      else if ((m = line.match(/^(#{1,3})\s+(.*)/))) { close(); out += `<h${m[1].length}>${inl(m[2])}</h${m[1].length}>`; }
-      else if ((m = line.match(/^\s*[-*]\s+(.*)/))) { if (list !== 'ul') { close(); out += '<ul>'; list = 'ul'; } out += `<li>${inl(m[1])}</li>`; }
-      else if ((m = line.match(/^\s*\d+\.\s+(.*)/))) { if (list !== 'ol') { close(); out += '<ol>'; list = 'ol'; } out += `<li>${inl(m[1])}</li>`; }
-      else if ((m = line.match(/^>\s?(.*)/))) { close(); out += `<blockquote>${inl(m[1])}</blockquote>`; }
-      else if (!line.trim()) close();
-      else { close(); out += `<p>${inl(line)}</p>`; }
-    }
-    close();
-    return out + (code ? '</pre>' : '');
+  // ----- markdown, Obsidian flavour (escape first: note bodies and AI replies are untrusted) -----
+  // Code, math, links and the few allowed HTML tags are parked as \u0001n\u0002 placeholders so later passes cannot touch them.
+  const SAFE_TAG = /<span style="color:\s*(?:#[0-9a-f]{3,8}|[a-z]{3,20})">|<mark style="background:\s*(?:#[0-9a-f]{3,8}|[a-z]{3,20})">|<\/span>|<\/?mark>|<\/?u>|<br\s*\/?>/gi;
+  const footDefs = src => { const d = {}; for (const m of String(src || '').matchAll(/^\[\^([^\]]+)\]:\s*(.*)$/gm)) d[esc(m[1])] = esc(m[2]); return d; };
+  const noPh = s => s.replace(/\u0001\d+\u0002/g, ''); // attribute values never carry parked HTML
+  function inline(s, ctx) {
+    const keep = [], put = h => '\u0001' + (keep.push(h) - 1) + '\u0002';
+    s = s.replace(/%%.*?%%/g, '')
+      .replace(/`([^`]+)`/g, (_, c) => put(`<code>${esc(c)}</code>`))
+      .replace(/\\([\\`*_{}[\]()#+\-.!|~=$%^<>])/g, (_, c) => put(esc(c)))
+      .replace(/\$(?=\S)([^$\n]*?\S)\$/g, (_, t) => put(`<span class="math" data-tex="${esc(t)}">${esc(t)}</span>`))
+      .replace(SAFE_TAG, t => put(/^<br/i.test(t) ? '<br>' : t));
+    s = esc(s)
+      .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, alt, src) => put(/^tempo-img:\w+$/.test(src) ? `<img data-img="${src.slice(10)}" alt="${noPh(alt)}">` : /^https?:\/\//.test(src) ? `<img src="${src}" alt="${noPh(alt)}" loading="lazy">` : ''))
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, (_, t, h) => put(`<a href="${h}" target="_blank" rel="noopener">${t}</a>`))
+      .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, t, a) => put(`<a class="wl" data-act="wikilink" data-t="${noPh(t).trim()}">${(a || t).trim()}</a>`))
+      .replace(/\^\[([^\]]+)\]/g, (_, t) => { ctx.fns.push(noPh(t)); return put(`<sup class="fn" title="${noPh(t)}">${ctx.fns.length}</sup>`); })
+      .replace(/\[\^([^\]]+)\]/g, (_, k) => put(`<sup class="fn" title="${ctx.defs[k] || ''}">${k}</sup>`))
+      .replace(/\*\*\*(?=\S)(.*?\S)\*\*\*/g, '<b><i>$1</i></b>').replace(/___(?=\S)(.*?\S)___/g, '<b><i>$1</i></b>')
+      .replace(/\*\*(?=\S)(.*?\S)\*\*/g, '<b>$1</b>').replace(/__(?=\S)(.*?\S)__/g, '<b>$1</b>')
+      .replace(/\*(?=\S)(.*?\S)\*/g, '<i>$1</i>').replace(/(^|[^\w])_(?=\S)(.*?\S)_(?!\w)/g, '$1<i>$2</i>')
+      .replace(/~~(?=\S)(.*?\S)~~/g, '<s>$1</s>').replace(/==(?=\S)(.*?\S)==/g, '<mark>$1</mark>')
+      .replace(/(^|\s)#([\p{L}\w/-]*\p{L}[\p{L}\w/-]*)/gu, '$1<span class="tag">#$2</span>');
+    for (let i = 0; i < 3 && s.includes('\u0001'); i++) s = s.replace(/\u0001(\d+)\u0002/g, (_, k) => keep[k]);
+    return s;
   }
-  const links = body => [...String(body || '').matchAll(/\[\[([^\]]+)\]\]/g)].map(m => m[1].trim());
+  // ```chart blocks: "type: bar|line|pie" then "Label: number" lines, drawn as a small SVG.
+  function chart(src) {
+    let type = 'bar'; const rows = [];
+    for (const l of src.split('\n')) {
+      const ty = l.match(/^\s*type\s*:\s*(bar|line|pie)\s*$/i), m = l.match(/^\s*([^:]+?)\s*:\s*(-?\d+(?:\.\d+)?)\s*$/);
+      if (ty) type = ty[1].toLowerCase(); else if (m && rows.length < 24) rows.push([esc(m[1]), Math.max(0, +m[2])]);
+    }
+    if (!rows.length) return `<pre class="code"><code>${esc(src)}</code></pre>`;
+    const W = 520, H = 230, n = rows.length, max = Math.max(...rows.map(r => r[1])) || 1, f = x => +x.toFixed(1);
+    let g = '';
+    if (type === 'pie') {
+      const tot = rows.reduce((a, r) => a + r[1], 0) || 1; let a0 = -Math.PI / 2;
+      rows.forEach(([lb, v], i) => {
+        const a1 = a0 + v / tot * Math.PI * 2, big = a1 - a0 > Math.PI ? 1 : 0, p = a => [f(115 + Math.cos(a) * 95), f(115 + Math.sin(a) * 95)];
+        g += v >= tot ? `<circle class="s${i % 6}" cx="115" cy="115" r="95"/>` : `<path class="s${i % 6}" d="M115 115L${p(a0)}A95 95 0 ${big} 1 ${p(a1)}Z"/>`;
+        g += `<rect class="s${i % 6}" x="250" y="${18 + i * 24}" width="12" height="12" rx="3"/><text x="270" y="${29 + i * 24}">${lb} · ${Math.round(v / tot * 100)}%</text>`;
+        a0 = a1;
+      });
+    } else {
+      const x = i => f(40 + (i + .5) * (W - 50) / n), y = v => f(H - 30 - v / max * (H - 50));
+      g += `<path class="ax" d="M40 ${H - 30}H${W - 10}"/>`;
+      if (type === 'line') g += `<path class="ln" d="${rows.map((r, i) => (i ? 'L' : 'M') + x(i) + ' ' + y(r[1])).join('')}"/>` + rows.map((r, i) => `<circle class="s0" cx="${x(i)}" cy="${y(r[1])}" r="4.5"/>`).join('');
+      else { const bw = f(Math.min(56, (W - 50) / n * .62)); g += rows.map((r, i) => `<rect class="s${i % 6}" x="${f(x(i) - bw / 2)}" y="${y(r[1])}" width="${bw}" height="${f(H - 30 - y(r[1]))}" rx="5" style="--i:${i}"/>`).join(''); }
+      g += rows.map((r, i) => `<text x="${x(i)}" y="${H - 12}" text-anchor="middle">${r[0].slice(0, 14)}</text><text class="v" x="${x(i)}" y="${y(r[1]) - 7}" text-anchor="middle">${r[1]}</text>`).join('');
+    }
+    return `<figure class="chart" role="img" aria-label="${type} chart: ${rows.map(r => r[0] + ' ' + r[1]).join(', ')}"><svg viewBox="0 0 ${W} ${H}">${g}</svg></figure>`;
+  }
+  // opt.defs: footnote definitions of the whole note; opt.fns: shared inline-footnote list (the caller then prints them).
+  // Task checkboxes carry data-line, the line index inside src.
+  function md(src, opt = {}) {
+    const lines = String(src ?? '').replace(/\r\n?/g, '\n').split('\n'), own = !opt.fns;
+    const ctx = { defs: opt.defs || footDefs(src), fns: opt.fns || [] }, sub = s => md(s, { defs: ctx.defs, fns: ctx.fns, nested: true });
+    const lists = [];
+    let out = '', para = [], i = 0, m;
+    const flush = () => { if (para.length) { out += `<p>${para.map(l => inline(l, ctx)).join('<br>')}</p>`; para = []; } };
+    const closeLists = () => { while (lists.length) out += `</${lists.pop().tag}>`; };
+    const end = () => { flush(); closeLists(); };
+    while (i < lines.length) {
+      const line = lines[i], t = line.trim();
+      if ((m = line.match(/^\s*(`{3,}|~{3,})\s*([\w+#.-]*)/))) {
+        end();
+        const fence = m[1], lang = m[2].toLowerCase(), body = [];
+        while (++i < lines.length && !lines[i].trim().startsWith(fence)) body.push(lines[i]);
+        i++;
+        const code = body.join('\n');
+        out += lang === 'mermaid' ? `<div class="mermaid-src" data-src="${esc(code)}"><pre class="code"><code>${esc(code)}</code></pre></div>` : lang === 'chart' ? chart(code)
+          : `<pre class="code"${lang ? ` data-lang="${esc(lang)}"` : ''}><code${lang ? ` class="language-${esc(lang)}"` : ''}>${esc(code)}</code></pre>`;
+        continue;
+      }
+      if (t.startsWith('$$')) {
+        end();
+        let tex = t.slice(2);
+        if (tex.length >= 2 && tex.endsWith('$$')) tex = tex.slice(0, -2);
+        else { const body = [tex]; while (++i < lines.length && !lines[i].trimEnd().endsWith('$$')) body.push(lines[i]); if (i < lines.length) body.push(lines[i].trimEnd().slice(0, -2)); tex = body.join('\n'); }
+        i++; tex = tex.trim();
+        out += `<div class="math blk" data-tex="${esc(tex)}">${esc(tex)}</div>`; continue;
+      }
+      if (t.startsWith('%%') && !t.slice(2).includes('%%')) { while (++i < lines.length && !lines[i].includes('%%')); i++; continue; } // hidden comment block
+      if (/^([-*_])(\s*\1){2,}$/.test(t)) { end(); out += '<hr>'; i++; continue; }
+      if ((m = t.match(/^(#{1,6})\s+(.*)$/))) { end(); out += `<h${m[1].length}>${inline(m[2].replace(/\s+#+$/, ''), ctx)}</h${m[1].length}>`; i++; continue; }
+      if (/^\s*>/.test(line)) {
+        end();
+        const body = [];
+        while (i < lines.length && /^\s*>/.test(lines[i])) body.push(lines[i++].replace(/^\s*>\s?/, ''));
+        const c = body[0].match(/^\[!([\w-]+)\]([+-]?)\s*(.*)$/);
+        if (c) {
+          const type = c[1].toLowerCase(), head = `<span class="c-ic" aria-hidden="true"></span><span>${inline(c[3] || type[0].toUpperCase() + type.slice(1), ctx)}</span>`, inner = sub(body.slice(1).join('\n'));
+          out += c[2] ? `<details class="callout" data-c="${esc(type)}"${c[2] === '+' ? ' open' : ''}><summary class="ct">${head}</summary><div class="cb">${inner}</div></details>`
+            : `<div class="callout" data-c="${esc(type)}"><div class="ct">${head}</div>${inner ? `<div class="cb">${inner}</div>` : ''}</div>`;
+        } else out += `<blockquote>${sub(body.join('\n'))}</blockquote>`;
+        continue;
+      }
+      if (line.includes('|') && (lines[i + 1] || '').includes('|') && /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/.test(lines[i + 1])) {
+        end();
+        const cells = l => l.trim().replace(/^\||\|$/g, '').split(/(?<!\\)\|/).map(c => c.trim());
+        const head = cells(line), al = cells(lines[i + 1]).map(c => (c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : '')), st = k => (al[k] ? ` style="text-align:${al[k]}"` : '');
+        let h = `<div class="tbl"><table><thead><tr>${head.map((c, k) => `<th${st(k)}>${inline(c, ctx)}</th>`).join('')}</tr></thead><tbody>`;
+        i += 2;
+        while (i < lines.length && lines[i].includes('|') && lines[i].trim()) { const r = cells(lines[i++]); h += `<tr>${head.map((_, k) => `<td${st(k)}>${inline(r[k] ?? '', ctx)}</td>`).join('')}</tr>`; }
+        out += h + '</tbody></table></div>'; continue;
+      }
+      if ((m = t.match(/^\[\^([^\]]+)\]:\s*(.*)$/))) { end(); out += `<div class="fndef"><sup>${esc(m[1])}</sup> ${inline(m[2], ctx)}</div>`; i++; continue; }
+      if ((m = line.match(/^([ \t]*)([-*+]|\d{1,9}[.)])\s+(.*)$/))) {
+        flush();
+        const ind = m[1].replace(/\t/g, '    ').length, tag = /\d/.test(m[2]) ? 'ol' : 'ul';
+        while (lists.length && lists[lists.length - 1].ind > ind) out += `</${lists.pop().tag}>`;
+        if (lists.length && lists[lists.length - 1].ind === ind && lists[lists.length - 1].tag !== tag) out += `</${lists.pop().tag}>`;
+        if (!lists.length || lists[lists.length - 1].ind < ind) { lists.push({ ind, tag }); out += tag === 'ol' && parseInt(m[2], 10) !== 1 ? `<ol start="${parseInt(m[2], 10)}">` : `<${tag}>`; }
+        const task = m[3].match(/^\[([ xX])\](?:\s+(.*))?$/), on = task && task[1] !== ' ';
+        out += task ? `<li class="tk${on ? ' done' : ''}"><input type="checkbox" data-line="${i}"${on ? ' checked' : ''} aria-label="Done">${inline(task[2] || '', ctx)}</li>` : `<li>${inline(m[3], ctx)}</li>`;
+        i++; continue;
+      }
+      if (!t) { end(); i++; continue; }
+      if (lists.length && /^\s/.test(line)) { out = out.slice(0, -5) + '<br>' + inline(t, ctx) + '</li>'; i++; continue; } // indented line continues the list item
+      closeLists(); para.push(t); i++;
+    }
+    end();
+    if (own && !opt.nested && ctx.fns.length) out += `<section class="fns"><ol>${ctx.fns.map(f => `<li>${f}</li>`).join('')}</ol></section>`;
+    return out;
+  }
+  // A note as editable blocks: runs of non-blank lines, with fenced code, $$ math and %% comments kept whole. s/e are line indexes (e exclusive).
+  function blocks(src) {
+    const lines = String(src ?? '').split('\n'), out = [];
+    let s = -1, fence = null;
+    const close = i => { if (s >= 0) { out.push({ s, e: i, t: lines.slice(s, i).join('\n') }); s = -1; } };
+    lines.forEach((l, i) => {
+      const t = l.trim();
+      if (fence) { if (fence === '$$' ? t.endsWith('$$') : fence === '%%' ? t.includes('%%') : t.startsWith(fence)) fence = null; return; }
+      if (!t) return close(i);
+      if (s < 0) s = i;
+      const f = t.match(/^(`{3,}|~{3,})/);
+      if (f) fence = f[1];
+      else if (t.startsWith('$$') && !(t.length > 3 && t.endsWith('$$'))) fence = '$$';
+      else if (t.startsWith('%%') && !t.slice(2).includes('%%')) fence = '%%';
+    });
+    close(lines.length);
+    return out;
+  }
+  const plain = s => String(s || '').replace(/```[\s\S]*?```|%%[\s\S]*?%%|\[![\w-]+\][+-]?/g, ' ').replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/<[^>]+>/g, '').replace(/[#>*_=~`|$[\]^]/g, '').replace(/\s+/g, ' ').trim();
+  const links = body => [...String(body || '').matchAll(/\[\[([^\]|]+)(?:\|[^\]]*)?\]\]/g)].map(m => m[1].trim());
 
   // ----- quizzes -----
   const shuffle = a => { a = [...a]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
@@ -224,7 +349,7 @@
   function facts(notes) {
     const out = new Map();
     for (const nt of notes || []) for (const raw of String(nt.body || '').split(/\n+/)) {
-      if (/^\s*#/.test(raw)) continue; // headings are titles, not facts
+      if (/^\s*(#|\[\^)/.test(raw)) continue; // headings are titles and footnote lines are sources, not facts
       const line = raw.replace(/^(?:[>\-\s]|\d+\.\s|\*\s)+/, '').trim();
       if (line.length < 12) continue;
       const bold = line.match(/\*\*([^*]{2,40})\*\*/);
@@ -362,7 +487,21 @@
     { q: 'What helps memory most after a study session?', o: ['Scrolling social media', 'An energy drink', 'Starting a new subject at once', 'Sleep'], a: 3, why: 'Sleep is when the brain consolidates what it learned.' },
   ];
 
-  const api = { TRAITS, QUESTIONS, ACH, STARTER, STYLE, COURSE, esc, clamp, scoreSurvey, summary, dateKey, parseKey, addDays, weekStart, streak, weekStreak, levelOf, md, links, shuffle, validQuiz, localQuiz,
-    facts, validSteps, validCourse, courseFromNote, srs, outline, planWeek, applyFreeze, toICS, nagLevel, crossWait, validTasks, wxInfo, MIN_AGE };
+  // Study to-dos from a note without AI: one per section heading, then bold key terms, else three generic steps.
+  function studySteps(body, max = 6) {
+    const heads = [...String(body || '').matchAll(/^#{1,3}\s+(.+)$/gm)].map(m => 'Study ' + plain(m[1]));
+    const out = [...heads, ...facts([{ body }]).map(f => 'Memorise ' + plain(f.term))].filter(t => t.length > 8);
+    return (out.length ? [...new Set(out)] : ['Read the key ideas', 'Explain it in your own words', 'Make 5 flashcards and review them']).slice(0, max);
+  }
+  // AI-written notes: { title, notes: [{ title, body, kids }] }. Untrusted: keep well-formed parts, two levels, at most 14 notes.
+  function validNotes(o) {
+    let n = 0;
+    const walk = (arr, d) => (Array.isArray(arr) ? arr : []).filter(x => x && typeof x.title === 'string' && x.title.trim() && n++ < 14)
+      .map(x => ({ title: x.title.trim().slice(0, 80), body: typeof x.body === 'string' ? x.body.slice(0, 30000) : '', kids: d < 2 ? walk(x.kids || x.children, d + 1) : [] }));
+    return o && typeof o === 'object' ? { title: String(o.title || '').trim().slice(0, 80), notes: walk(o.notes, 1) } : { title: '', notes: [] };
+  }
+
+  const api = { TRAITS, QUESTIONS, ACH, STARTER, STYLE, COURSE, esc, clamp, scoreSurvey, summary, dateKey, parseKey, addDays, weekStart, streak, weekStreak, levelOf, md, blocks, plain, footDefs, links, shuffle, validQuiz, localQuiz,
+    facts, validSteps, validCourse, courseFromNote, srs, outline, planWeek, applyFreeze, toICS, nagLevel, crossWait, validTasks, studySteps, validNotes, wxInfo, MIN_AGE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.TempoLogic = api;
 })(typeof window !== 'undefined' ? window : globalThis);

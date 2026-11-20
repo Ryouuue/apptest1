@@ -57,7 +57,7 @@ ACT.aiSignIn = async () => {
     await loadPuter(); await puter.auth.signIn();
     const u = await puter.auth.getUser().catch(() => null);
     S.settings.aiUser = u?.username || 'signed in'; save(); sfx.ok(); toast('Signed in. The tutor is ready.');
-    if (cur === 'tutor' || cur === 'settings') go(cur);
+    if (cur === 'tutor' || cur === 'settings' || cur === 'notes' || cur === 'home') go(cur);
   } catch (e) { toast(e?.error === 'auth_window_closed' ? 'Sign-in window closed.' : aiErr(e).message, 'bad'); }
 };
 ACT.aiSignOut = async () => { try { await loadPuter(); await puter.auth.signOut(); } catch { /* signing out locally is enough */ } S.settings.aiUser = ''; save(); go(cur); toast('Signed out of the AI tutor.'); };
@@ -108,6 +108,12 @@ async function askAI(messages, system = tutorSystem(), prov = S.settings.ai) {
     } catch (e) { paint(`<div class="msg assistant error" role="alert">${esc(e.message)}</div>`); sfx.bad(); }
     busy = false;
   }
+  // From Home's "What should we learn today?": open the tutor and send the question.
+  ACT.askTutor = text => {
+    go('tutor');
+    if (!aiReady()) return toast('Sign in to the tutor first, then ask again.', 'bad');
+    send(text);
+  };
   ACT.chatChip = el => { const t = $('#chatIn'); if (!t) return toast('Connect the tutor below to start chatting.'); send(el.textContent); };
   ACT.chatSend = () => { const t = $('#chatIn'); send(t.value); t.value = ''; t.focus(); };
   ACT.chatClear = () => { const old = S.chat; S.chat = []; save(); paint(); toast('Chat cleared.', '', ['Undo', () => { S.chat = old; save(); paint(); }]); };

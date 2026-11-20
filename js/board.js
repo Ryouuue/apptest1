@@ -4,22 +4,20 @@
 (() => {
   const COLORS = ['#f3f5f9', '#1b1f2e', '#f96a0a', '#ef4444', '#f5b301', '#22c55e', '#3b82f6', '#a855f7', '#ec4899'];
   const STICKY = ['#fde68a', '#e2d9fb', '#fcd5c0', '#cdeccd', '#cfe4fb'];
-  const TOOLS = [['hand', 'Move (V)', 'hand'], ['arrow', 'Pointer arrow (A): drag from a note or picture to another', 'arrow'], ['pen', 'Pen (P)', 'squig', 1.5], ['marker', 'Marker (M)', 'squig', 3.5], ['hl', 'Highlighter (H)', 'squig', 6.5], ['eraser', 'Eraser (E)', 'eraser']];
-  const WIDTH = { pen: 1, marker: 3.2, hl: 8 }, ALPHA = { pen: 1, marker: .92, hl: .35 };
-  let tool = 'hand', color, size = 3, wrap, cv, ctx, world, links, live = null, drag = null, erased = null, linking = null, selLink = null, space = false, raf = 0, undo = [], redo = [], zTop = 1, ro, lastPt = null;
+  // Three pointer tools: a straight arrow, a curved arrow, and a connector pinned to fixed side points of both items.
+  const TOOLS = [['hand', 'Move (V)', 'hand'], ['line', 'Drag and point (L): straight arrow from a note, node or picture to another', 'arrow'], ['arrow', 'Drag and point, curved (A)', 'curve'],
+    ['connect', 'Connect (K): join two items at fixed side points', 'connect'], ['pen', 'Pen (P)', 'squig', 1.5], ['marker', 'Marker (M)', 'squig', 3.5], ['hl', 'Highlighter (H)', 'squig', 6.5], ['eraser', 'Eraser (E)', 'eraser']];
+  const WIDTH = { pen: 1, marker: 3.2, hl: 8 }, ALPHA = { pen: 1, marker: .92, hl: .35 }, LINKERS = new Set(['line', 'arrow', 'connect']);
+  const NODE_C = ['', '#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#a855f7'];
+  const SIDE = { t: [.5, 0, 0, -1], r: [1, .5, 1, 0], b: [.5, 1, 0, 1], l: [0, .5, -1, 0] }; // anchor: fraction of w/h, then the outward normal
+  const ANC = Object.keys(SIDE).map(k => `<i class="anc" data-side="${k}"></i>`).join('');
+  let tool = 'hand', color, size = 3, wrap, cv, ctx, world, links, live = null, drag = null, erased = null, linking = null, selLink = null, space = false, raf = 0, undo = [], redo = [], zTop = 1, ro, nro, lastPt = null;
   const urls = [];
   const B = () => S.board, V = () => S.board.view;
   const toWorld = (cx, cy) => { const r = wrap.getBoundingClientRect(), v = V(); return [(cx - r.left - v.x) / v.z, (cy - r.top - v.y) / v.z]; };
   const item = id => B().stickies.find(s => s.id === id) || B().images.find(s => s.id === id);
 
-  // Pictures are blobs in IndexedDB (localStorage is far too small); the board keeps only their position and size.
-  const idb = (() => {
-    let dbP;
-    const db = () => (dbP ||= new Promise((res, rej) => { const r = indexedDB.open('tempo', 1); r.onupgradeneeded = () => r.result.createObjectStore('img'); r.onsuccess = () => res(r.result); r.onerror = () => { dbP = null; rej(r.error); }; }));
-    const run = (mode, fn) => db().then(d => new Promise((res, rej) => { const tx = d.transaction('img', mode), q = fn(tx.objectStore('img')); tx.oncomplete = () => res(q.result); tx.onerror = () => rej(tx.error); }));
-    return { get: k => run('readonly', s => s.get(k)), put: (k, v) => run('readwrite', s => s.put(v, k)), del: k => run('readwrite', s => s.delete(k)) };
-  })();
-
+  // Pictures are blobs in IndexedDB (the shared idb in core.js); the board keeps only their position and size.
   function path(s) {
     const p = s.p;
     ctx.globalAlpha = ALPHA[s.t]; ctx.strokeStyle = s.c; ctx.lineWidth = s.s * WIDTH[s.t]; ctx.lineCap = ctx.lineJoin = 'round';
@@ -52,19 +50,28 @@
   // Arrows live in world space inside .world, so zoom scales line, head and anchors together.
   // Each end is a note/picture id (anchored to the side facing the other end) or a free point.
   const center = e => { const s = e.id && item(e.id); return s ? { x: s.x + s.w / 2, y: s.y + s.h / 2 } : e; };
+  const nearSide = (s, x, y) => Object.keys(SIDE).reduce((b, k) => { const [fx, fy] = SIDE[k], d = (s.x + s.w * fx - x) ** 2 + (s.y + s.h * fy - y) ** 2; return d < b[1] ? [k, d] : b; }, ['t', Infinity])[0];
   function endPt(e, to) {
     const s = e.id && item(e.id);
     if (!s) return { x: e.x, y: e.y, free: true };
+    if (e.side) { const [fx, fy, nx, ny] = SIDE[e.side]; return { x: s.x + s.w * fx, y: s.y + s.h * fy, nx, ny }; }
     const cx = s.x + s.w / 2, cy = s.y + s.h / 2, dx = to.x - cx, dy = to.y - cy;
     if (Math.abs(dx) / s.w > Math.abs(dy) / s.h) return dx > 0 ? { x: s.x + s.w, y: cy, nx: 1, ny: 0 } : { x: s.x, y: cy, nx: -1, ny: 0 };
     return dy > 0 ? { x: cx, y: s.y + s.h, nx: 0, ny: 1 } : { x: cx, y: s.y, nx: 0, ny: -1 };
   }
   function geom(l) {
-    const a = endPt(l.a, center(l.b)), b = endPt(l.b, center(l.a)), d = Math.hypot(b.x - a.x, b.y - a.y) || 1, k = L.clamp(d * .4, 24, 180), ux = (b.x - a.x) / d, uy = (b.y - a.y) / d;
+    const a = endPt(l.a, center(l.b)), b = endPt(l.b, center(l.a)), d = Math.hypot(b.x - a.x, b.y - a.y) || 1, k = L.clamp(d * .4, 24, 180), ux = (b.x - a.x) / d, uy = (b.y - a.y) / d, f = n => n.toFixed(1);
+    if (l.k === 'line') { // straight: the line stops at the head's base
+      const H = 15, W = 7.5, e = { x: b.x - ux * H, y: b.y - uy * H };
+      return { d: `M${f(a.x)} ${f(a.y)}L${f(e.x)} ${f(e.y)}`, head: `M${f(b.x)} ${f(b.y)}L${f(e.x - uy * W)} ${f(e.y + ux * W)}L${f(e.x + uy * W)} ${f(e.y - ux * W)}Z`, at: t => ({ x: a.x + (e.x - a.x) * t, y: a.y + (e.y - a.y) * t }) };
+    }
     const c1 = { x: a.x + (a.free ? ux : a.nx) * k, y: a.y + (a.free ? uy : a.ny) * k }, c2 = { x: b.x + (b.free ? -ux : b.nx) * k, y: b.y + (b.free ? -uy : b.ny) * k };
+    if (l.k === 'connect') { // leaves and enters each item square to its side; a dot marks both anchors, no head
+      const at = t => { const u = 1 - t; return { x: u * u * u * a.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * b.x, y: u * u * u * a.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * b.y }; };
+      return { d: `M${f(a.x)} ${f(a.y)}C${f(c1.x)} ${f(c1.y)} ${f(c2.x)} ${f(c2.y)} ${f(b.x)} ${f(b.y)}`, head: '', dots: [a, b], at };
+    }
     const tl = Math.hypot(b.x - c2.x, b.y - c2.y) || 1, hx = (b.x - c2.x) / tl, hy = (b.y - c2.y) / tl, H = 15, W = 7.5, e = { x: b.x - hx * H, y: b.y - hy * H }; // the line stops at the head's base
     const at = t => { const u = 1 - t; return { x: u * u * u * a.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * e.x, y: u * u * u * a.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * e.y }; };
-    const f = n => n.toFixed(1);
     return { d: `M${f(a.x)} ${f(a.y)}C${f(c1.x)} ${f(c1.y)} ${f(c2.x)} ${f(c2.y)} ${f(e.x)} ${f(e.y)}`, head: `M${f(b.x)} ${f(b.y)}L${f(e.x - hy * W)} ${f(e.y + hx * W)}L${f(e.x + hy * W)} ${f(e.y - hx * W)}Z`, at };
   }
   function drawLinks() {
@@ -73,7 +80,7 @@
     let h = '';
     for (const l of [...B().links, ...(linking ? [{ ...linking, id: 'live', live: true }] : [])]) {
       const g = geom(l), on = l.id === selLink, m = g.at(.5);
-      h += `<g class="lnk ${on ? 'sel' : ''} ${l.live ? 'live' : ''}" data-l="${l.id}" style="--c:${l.c || color}"><path class="hit" d="${g.d}"/><path class="ln" d="${g.d}"/><path class="hd" d="${g.head}"/>${on ? `<g class="ldel" transform="translate(${m.x.toFixed(1)} ${m.y.toFixed(1)})" role="button" aria-label="Delete arrow"><circle r="12"/><path d="M-4.5-4.5L4.5 4.5M4.5-4.5L-4.5 4.5"/></g>` : ''}</g>`;
+      h += `<g class="lnk ${on ? 'sel' : ''} ${l.live ? 'live' : ''}" data-l="${l.id}" style="--c:${l.c || color}"><path class="hit" d="${g.d}"/><path class="ln" d="${g.d}"/>${g.head ? `<path class="hd" d="${g.head}"/>` : ''}${g.dots ? g.dots.map(p => `<circle class="dt" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="5"/>`).join('') : ''}${on ? `<g class="ldel" transform="translate(${m.x.toFixed(1)} ${m.y.toFixed(1)})" role="button" aria-label="Delete arrow"><circle r="12"/><path d="M-4.5-4.5L4.5 4.5M4.5-4.5L-4.5 4.5"/></g>` : ''}</g>`;
     }
     links.innerHTML = h;
   }
@@ -132,16 +139,44 @@
     const pic = !('t' in s), list = pic ? B().images : B().stickies, i = list.indexOf(s), gone = B().links.filter(l => l.a.id === s.id || l.b.id === s.id);
     list.splice(i, 1); B().links = B().links.filter(l => !gone.includes(l)); sfx.trash(); save(); drawLinks();
     el.animate([{ transform: `rotate(${s.r || 0}deg)` }, { transform: 'scale(1.1) rotate(-6deg)', offset: .25 }, { transform: 'scale(0) rotate(40deg) translateY(60px)', opacity: 0 }], { duration: 320, easing: 'ease-in' }).onfinish = () => el.remove();
-    toast(pic ? 'Picture deleted.' : 'Sticky note deleted.', '', ['Undo', () => { list.splice(i, 0, s); B().links.push(...gone); world?.append(pic ? imageEl(s) : stickyEl(s)); drawLinks(); save(); }]);
+    toast(pic ? 'Picture deleted.' : s.k === 'node' ? 'Node deleted.' : 'Sticky note deleted.', '', ['Undo', () => { list.splice(i, 0, s); B().links.push(...gone); world?.append(pic ? imageEl(s) : stickyEl(s)); drawLinks(); save(); }]);
     if (pic) setTimeout(() => { if (!B().images.includes(s)) idb.del(s.id).catch(() => {}); }, 7000); // after the Undo window
   }
 
   // ----- sticky notes -----
+  // A node is a card that grows with its text (markdown, shown rendered until double-clicked). It lives in the stickies list with k: 'node'.
+  function nodeEl(s) {
+    const el = document.createElement('div');
+    el.className = 'bnode'; el.dataset.id = s.id; el.tabIndex = 0;
+    el.style.cssText = `left:${s.x}px;top:${s.y}px;width:${s.w}px;--rot:0deg;${s.c ? `--c:${s.c};` : ''}z-index:${s.z || 1}`;
+    el.innerHTML = `<div class="nbar" title="Drag to move">${NODE_C.map(c => `<button style="background:${c || 'var(--panel2)'}" data-c="${c}" aria-label="${c ? 'Colour ' + c : 'No colour'}"></button>`).join('')}<button class="del" aria-label="Delete node">${icon('trash', 15)}</button></div>
+      <div class="nview mdv"></div><div class="ntext" contenteditable="plaintext-only" role="textbox" aria-multiline="true" aria-label="Node text (markdown)" data-ph="Write… markdown works" hidden></div>${ANC}`;
+    const view = $('.nview', el), txt = $('.ntext', el), bar = $('.nbar', el);
+    const show = () => { view.innerHTML = s.t.trim() ? L.md(s.t) : '<p class="muted">Double-click to write</p>'; hydrate(view); };
+    el._edit = () => {
+      view.hidden = true; txt.hidden = false; txt.textContent = s.t; txt.focus();
+      const r = document.createRange(); r.selectNodeContents(txt); r.collapse(false); getSelection().removeAllRanges(); getSelection().addRange(r);
+    };
+    txt.oninput = () => { s.t = txt.innerText; save(); };
+    txt.onblur = () => { txt.hidden = true; view.hidden = false; show(); };
+    txt.onkeydown = e => { if (e.key === 'Escape') { e.stopPropagation(); txt.blur(); el.focus(); } };
+    view.ondblclick = el._edit;
+    el.onkeydown = e => { if (e.target !== el) return; if (e.key === 'Enter') { e.preventDefault(); el._edit(); } else if (e.key === 'Delete') dropItem(s, el); };
+    bar.onclick = e => {
+      const b = e.target.closest('button'); if (!b || el._moved) return;
+      if (b.dataset.c != null) { s.c = b.dataset.c; s.c ? el.style.setProperty('--c', s.c) : el.style.removeProperty('--c'); sfx.tap(); return save(); }
+      dropItem(s, el);
+    };
+    el.onpointerdown = e => { if (!e.target.closest('.ntext:not([hidden]),.anc,a,input,summary')) dragItem(el, s, e); };
+    show();
+    return el;
+  }
   function stickyEl(s) {
+    if (s.k === 'node') return nodeEl(s);
     const el = document.createElement('div');
     el.className = 'sticky'; el.dataset.id = s.id;
     el.style.cssText = `left:${s.x}px;top:${s.y}px;width:${s.w}px;height:${s.h}px;--c:${s.c};--rot:${s.r}deg;z-index:${s.z || 1}`;
-    el.innerHTML = `<i class="tape"></i><div class="sbar" title="Drag to move">${STICKY.map(c => `<button style="background:${c}" data-c="${c}" aria-label="Change colour"></button>`).join('')}<button class="del" aria-label="Delete note">${icon('trash', 16)}</button></div><div class="stext" contenteditable="plaintext-only" role="textbox" aria-label="Sticky note" data-ph="Write something…"></div>`;
+    el.innerHTML = `<i class="tape"></i><div class="sbar" title="Drag to move">${STICKY.map(c => `<button style="background:${c}" data-c="${c}" aria-label="Change colour"></button>`).join('')}<button class="del" aria-label="Delete note">${icon('trash', 16)}</button></div><div class="stext" contenteditable="plaintext-only" role="textbox" aria-label="Sticky note" data-ph="Write something…"></div>${ANC}`;
     const bar = $('.sbar', el), txt = $('.stext', el);
     txt.textContent = s.t;
     txt.oninput = () => { s.t = txt.innerText; save(); };
@@ -155,10 +190,12 @@
     bar.onpointerdown = e => dragItem(el, s, e);
     return el;
   }
-  function addSticky(c, x, y, from) {
-    const s = { id: uid(), x: Math.round(x), y: Math.round(y), w: 190, h: 170, c, t: '', r: +(Math.random() * 5 - 2.5).toFixed(1), z: ++zTop };
+  function addSticky(c, x, y, from, k) {
+    const s = k === 'node' ? { id: uid(), k, x: Math.round(x), y: Math.round(y), w: 260, h: 90, c: '', t: '', r: 0, z: ++zTop }
+      : { id: uid(), x: Math.round(x), y: Math.round(y), w: 190, h: 170, c, t: '', r: +(Math.random() * 5 - 2.5).toFixed(1), z: ++zTop };
     B().stickies.push(s);
     const el = world.appendChild(stickyEl(s));
+    if (k === 'node') nro?.observe(el);
     if (from && !reduced()) { // click-to-add: the note flies from the tray on an arc
       const a = from.getBoundingClientRect(), b = el.getBoundingClientRect(), z = V().z, dx = (a.left - b.left) / z, dy = (a.top - b.top) / z;
       el.animate([{ transform: `translate(${dx}px,${dy}px) scale(.3) rotate(-25deg)` }, { transform: `translate(${dx * .35}px,${dy * .35 - 110}px) scale(1.12) rotate(10deg)`, offset: .6 },
@@ -166,16 +203,16 @@
       setTimeout(() => sfx.drop(), 420);
     } else { el.classList.add('plop'); sfx.drop(); }
     save(); checkAch();
-    setTimeout(() => { if (tool === 'hand' && el.isConnected) $('.stext', el).focus(); }, from ? 540 : 60); // do not steal focus if the user already moved on
+    setTimeout(() => { if (tool === 'hand' && el.isConnected) el._edit ? el._edit() : $('.stext', el).focus(); }, from ? 540 : 60); // do not steal focus if the user already moved on
   }
   function trayDrag(pad) {
     pad.onpointerdown = e => {
       e.preventDefault(); pad.setPointerCapture(e.pointerId);
-      const c = pad.dataset.c, sx = e.clientX, sy = e.clientY; let ghost = null, lx = sx;
+      const c = pad.dataset.c, k = pad.dataset.k, sx = e.clientX, sy = e.clientY; let ghost = null, lx = sx;
       pad.onpointermove = ev => {
         const z = V().z;
         if (!ghost && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 6) {
-          ghost = document.createElement('div'); ghost.className = 'sticky ghost'; ghost.style.setProperty('--c', c); ghost.innerHTML = '<i class="tape"></i>';
+          ghost = document.createElement('div'); ghost.className = k ? 'bnode ghost' : 'sticky ghost'; if (c) ghost.style.setProperty('--c', c); ghost.innerHTML = k ? '' : '<i class="tape"></i>';
           document.body.append(ghost); sfx.pick();
         }
         if (ghost) {
@@ -186,12 +223,12 @@
       pad.onpointerup = pad.onpointercancel = ev => {
         pad.onpointermove = pad.onpointerup = pad.onpointercancel = null;
         setTool('hand');
-        if (!ghost) { const r = wrap.getBoundingClientRect(), [x, y] = toWorld(r.left + r.width / 2, r.top + r.height / 2); return addSticky(c, x - 95 + Math.random() * 60 - 30, y - 85 + Math.random() * 60 - 30, pad); }
+        if (!ghost) { const r = wrap.getBoundingClientRect(), [x, y] = toWorld(r.left + r.width / 2, r.top + r.height / 2); return addSticky(c, x - 95 + Math.random() * 60 - 30, y - 85 + Math.random() * 60 - 30, pad, k); }
         ghost.remove();
         const r = wrap.getBoundingClientRect(), over = document.elementFromPoint(ev.clientX, ev.clientY);
         if (ev.type === 'pointercancel' || over?.closest('.tray') || ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom) return sfx.tap(); // dropped back on the tray: cancel
         const z = V().z, [x, y] = toWorld(ev.clientX - 95 * z, ev.clientY - 17 * z);
-        addSticky(c, x, y);
+        addSticky(c, x, y, null, k);
       };
     };
   }
@@ -201,9 +238,9 @@
     const el = document.createElement('figure');
     el.className = 'bimg'; el.dataset.id = m.id; el.tabIndex = 0;
     el.style.cssText = `left:${m.x}px;top:${m.y}px;width:${m.w}px;height:${m.h}px;z-index:${m.z || 1}`;
-    el.innerHTML = `<img alt="${esc(m.name || 'Picture')}" draggable="false"><div class="ibar"><button data-k="dl" aria-label="Save picture">${icon('down', 16)}</button><button data-k="del" aria-label="Delete picture">${icon('trash', 16)}</button></div><i class="grip" title="Drag to resize"></i>`;
+    el.innerHTML = `<img alt="${esc(m.name || 'Picture')}" draggable="false"><div class="ibar"><button data-k="dl" aria-label="Save picture">${icon('down', 16)}</button><button data-k="del" aria-label="Delete picture">${icon('trash', 16)}</button></div><i class="grip" title="Drag to resize"></i>${ANC}`;
     idb.get(m.id).then(b => { if (!b) return el.classList.add('missing'); const u = URL.createObjectURL(b); urls.push(u); $('img', el).src = u; }).catch(() => el.classList.add('missing'));
-    el.onpointerdown = e => { if (!e.target.closest('.ibar,.grip')) dragItem(el, m, e); };
+    el.onpointerdown = e => { if (!e.target.closest('.ibar,.grip,.anc')) dragItem(el, m, e); };
     $('.ibar', el).onclick = e => {
       const b = e.target.closest('button'); if (!b || el._moved) return;
       if (b.dataset.k === 'del') return dropItem(m, el);
@@ -256,14 +293,21 @@
     const pad = 60, w = x1 - x0 + pad * 2, h = y1 - y0 + pad * 2, k = Math.min(2, 6000 / Math.max(w, h)), c = document.createElement('canvas'), g = c.getContext('2d');
     c.width = Math.ceil(w * k); c.height = Math.ceil(h * k);
     g.scale(k, k); g.fillStyle = getComputedStyle(wrap).backgroundColor; g.fillRect(0, 0, w, h); g.translate(pad - x0, pad - y0);
-    for (const l of B().links) { const gm = geom(l); g.strokeStyle = g.fillStyle = l.c || color; g.lineWidth = 3; g.lineCap = 'round'; g.stroke(new Path2D(gm.d)); g.fill(new Path2D(gm.head)); }
+    for (const l of B().links) {
+      const gm = geom(l); g.strokeStyle = g.fillStyle = l.c || color; g.lineWidth = 3; g.lineCap = 'round'; g.stroke(new Path2D(gm.d));
+      if (gm.head) g.fill(new Path2D(gm.head));
+      for (const p of gm.dots || []) { g.beginPath(); g.arc(p.x, p.y, 5, 0, Math.PI * 2); g.fill(); }
+    }
+    const css = getComputedStyle(wrap), tok = n => css.getPropertyValue(n).trim();
     for (const s of [...st, ...im].sort((a, b) => (a.z || 0) - (b.z || 0))) {
       if (!('t' in s)) { const img = $(`[data-id="${s.id}"] img`, world); if (img?.naturalWidth) g.drawImage(img, s.x, s.y, s.w, s.h); continue; }
       g.save(); g.translate(s.x + s.w / 2, s.y + s.h / 2); g.rotate(s.r * Math.PI / 180); g.translate(-s.w / 2, -s.h / 2);
-      g.shadowColor = 'rgba(0,0,0,.25)'; g.shadowBlur = 14; g.shadowOffsetY = 6; g.fillStyle = s.c; g.fillRect(0, 0, s.w, s.h); g.shadowColor = 'transparent';
-      g.fillStyle = '#2a2433'; g.font = '15px "Segoe UI", sans-serif'; g.textBaseline = 'top';
-      let y = 36;
-      for (const para of s.t.split('\n')) { // simple word wrap inside the note
+      const node = s.k === 'node';
+      g.shadowColor = 'rgba(0,0,0,.25)'; g.shadowBlur = 14; g.shadowOffsetY = 6; g.fillStyle = node ? tok('--panel') : s.c; g.fillRect(0, 0, s.w, s.h); g.shadowColor = 'transparent';
+      if (node) { g.fillStyle = s.c || tok('--line'); g.fillRect(0, 0, s.w, 5); }
+      g.fillStyle = node ? tok('--text') : '#2a2433'; g.font = '15px "Segoe UI", sans-serif'; g.textBaseline = 'top';
+      let y = node ? 18 : 36;
+      for (const para of (node ? s.t.split('\n').map(L.plain) : s.t.split('\n'))) { // simple word wrap inside the note
         let line = '';
         for (const word of para.split(' ')) { const t = line ? line + ' ' + word : word; if (line && g.measureText(t).width > s.w - 28) { g.fillText(line, 14, y); y += 21; line = word; } else line = t; }
         g.fillText(line, 14, y); y += 21; if (y > s.h - 12) break;
@@ -281,7 +325,7 @@
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); return e.shiftKey ? history(redo, undo) : history(undo, redo); }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); return history(redo, undo); }
     if ((e.key === 'Delete' || e.key === 'Backspace') && selLink) { e.preventDefault(); return removeLink(selLink); }
-    const t = { v: 'hand', a: 'arrow', p: 'pen', m: 'marker', h: 'hl', e: 'eraser' }[e.key.toLowerCase()];
+    const t = { v: 'hand', l: 'line', a: 'arrow', k: 'connect', p: 'pen', m: 'marker', h: 'hl', e: 'eraser' }[e.key.toLowerCase()];
     if (t && !e.ctrlKey && !e.metaKey && !e.altKey) setTool(t);
   };
 
@@ -291,7 +335,7 @@
       if (!color || color === COLORS[0] || color === COLORS[1]) color = isDark() ? COLORS[0] : COLORS[1];
       root.innerHTML = `<div class="board" data-tool="${tool}"><canvas></canvas><div class="world"><svg class="links" width="1" height="1" aria-hidden="true"></svg></div>
         <div class="bd-title aux"><h2>Your Big Archive</h2><span class="muted">Drag to move · scroll to zoom · paste or drop pictures</span></div>
-        <div class="tray aux"><small>Sticky<br>notes</small>${STICKY.map(c => `<div class="pad" style="--c:${c}" data-c="${c}" role="button" tabindex="0" aria-label="Add sticky note. Drag onto the board or press Enter."></div>`).join('')}<small>drag me</small></div>
+        <div class="tray aux"><div class="pad nodepad" data-k="node" role="button" tabindex="0" aria-label="Add a node card that grows with its text. Drag onto the board or press Enter."><i></i><i></i><i></i></div><small>Node</small><small>Sticky<br>notes</small>${STICKY.map(c => `<div class="pad" style="--c:${c}" data-c="${c}" role="button" tabindex="0" aria-label="Add sticky note. Drag onto the board or press Enter."></div>`).join('')}<small>drag me</small></div>
         <div class="tools" role="toolbar" aria-label="Drawing tools">${TOOLS.map(([t, label, ic, w]) => `<button class="icb" data-tool="${t}" title="${label}" aria-label="${label}">${icon(ic, 22, w || 1.8)}</button>`).join('')}
           <button class="icb" data-h="img" title="Add pictures (or paste / drop them)" aria-label="Add pictures">${icon('image', 22)}</button>
           <span class="sep"></span>${COLORS.map(c => `<button class="col ${c === color ? 'on' : ''}" style="--c:${c}" data-col="${c}" aria-label="Colour ${c}"></button>`).join('')}
@@ -301,9 +345,11 @@
         <div class="drophint" aria-hidden="true">${icon('image', 30)}<b>Drop pictures to pin them</b></div></div>`;
       wrap = $('.board', root); cv = $('canvas', wrap); ctx = cv.getContext('2d'); world = $('.world', wrap); links = $('.links', wrap); selLink = linking = null; lastPt = null;
       zTop = Math.max(1, ...B().stickies.map(s => s.z || 1), ...B().images.map(s => s.z || 1));
-      for (const s of B().stickies) world.append(stickyEl(s));
+      // Nodes size themselves to their text; their measured box feeds arrows and the PNG export.
+      nro = new ResizeObserver(es => { for (const en of es) { const s = item(en.target.dataset.id); if (s && en.target.isConnected) { s.w = en.target.offsetWidth; s.h = en.target.offsetHeight; } } drawLinks(); });
+      for (const s of B().stickies) { const el = world.appendChild(stickyEl(s)); if (s.k === 'node') nro.observe(el); }
       for (const m of B().images) world.append(imageEl(m));
-      $$('.pad', wrap).forEach(p => { trayDrag(p); p.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const r = wrap.getBoundingClientRect(), [x, y] = toWorld(r.left + r.width / 2, r.top + r.height / 2); setTool('hand'); addSticky(p.dataset.c, x - 95, y - 85, p); } }; });
+      $$('.pad', wrap).forEach(p => { trayDrag(p); p.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); const r = wrap.getBoundingClientRect(), [x, y] = toWorld(r.left + r.width / 2, r.top + r.height / 2); setTool('hand'); addSticky(p.dataset.c, x - 95, y - 85, p, p.dataset.k); } }; });
       setTool(tool);
 
       $('.tools', wrap).onclick = e => {
@@ -330,14 +376,14 @@
       wrap.addEventListener('wheel', e => { e.preventDefault(); zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * .0015)); }, { passive: false });
       // The arrow tool runs in the capture phase, so pressing on a note starts an arrow instead of moving or editing it.
       wrap.addEventListener('pointerdown', e => {
-        if (tool !== 'arrow' || e.button || space || e.target.closest('.tools,.tray,.zoom')) return;
+        if (!LINKERS.has(tool) || e.button || space || e.target.closest('.tools,.tray,.zoom')) return;
         e.preventDefault(); e.stopPropagation(); document.activeElement?.blur?.(); wrap.setPointerCapture(e.pointerId);
-        const hit = e.target.closest('.world [data-id]'), [x, y] = toWorld(e.clientX, e.clientY);
-        linking = { a: hit ? { id: hit.dataset.id } : { x, y }, b: { x, y }, c: color, sx: e.clientX, sy: e.clientY };
+        const hit = e.target.closest('.world [data-id]'), [x, y] = toWorld(e.clientX, e.clientY), side = hit && tool === 'connect' ? e.target.closest('.anc')?.dataset.side || nearSide(item(hit.dataset.id), x, y) : null;
+        linking = { a: hit ? { id: hit.dataset.id, ...(side && { side }) } : { x, y }, b: { x, y }, c: color, k: tool === 'arrow' ? undefined : tool, sx: e.clientX, sy: e.clientY };
         drawLinks();
       }, true);
       wrap.onpointerdown = e => {
-        if (e.target.closest('.tools,.tray,.zoom,.sticky,.bimg,.lnk')) return;
+        if (e.target.closest('.tools,.tray,.zoom,.sticky,.bnode,.bimg,.lnk')) return;
         document.activeElement?.blur?.(); wrap.setPointerCapture(e.pointerId);
         if (selLink) { selLink = null; drawLinks(); }
         const v = V();
@@ -350,8 +396,10 @@
         if (linking) {
           const [x, y] = toWorld(e.clientX, e.clientY), over = document.elementFromPoint(e.clientX, e.clientY)?.closest('.world [data-id]');
           $$('.world .target', wrap).forEach(el => el !== over && el.classList.remove('target'));
-          if (over && over.dataset.id !== linking.a.id) over.classList.add('target');
-          linking.b = over && over.dataset.id !== linking.a.id ? { id: over.dataset.id } : { x, y };
+          $$('.anc.hot', wrap).forEach(a => a.classList.remove('hot'));
+          const ok = over && over.dataset.id !== linking.a.id, side = ok && linking.k === 'connect' ? nearSide(item(over.dataset.id), x, y) : null;
+          if (ok) { over.classList.add('target'); if (side) $(`.anc[data-side="${side}"]`, over)?.classList.add('hot'); }
+          linking.b = ok ? { id: over.dataset.id, ...(side && { side }) } : { x, y };
           return drawLinks();
         }
         if (drag) { const v = V(); v.x = e.clientX - drag.x; v.y = e.clientY - drag.y; return redraw(); }
@@ -365,10 +413,10 @@
       };
       wrap.onpointerup = wrap.onpointercancel = e => {
         if (linking) {
-          const l = linking; linking = null; $$('.world .target', wrap).forEach(el => el.classList.remove('target'));
+          const l = linking; linking = null; $$('.world .target', wrap).forEach(el => el.classList.remove('target')); $$('.anc.hot', wrap).forEach(a => a.classList.remove('hot'));
           const far = Math.hypot(e.clientX - l.sx, e.clientY - l.sy) > 10, same = l.a.id && l.a.id === l.b.id;
           if (e.type === 'pointerup' && far && !same) {
-            const nl = { id: uid(), a: l.a, b: l.b, c: l.c }; B().links.push(nl); undo.push({ k: 'link', add: [nl], del: [] }); redo = []; sfx.drop(); save();
+            const nl = { id: uid(), a: l.a, b: l.b, c: l.c, ...(l.k && { k: l.k }) }; B().links.push(nl); undo.push({ k: 'link', add: [nl], del: [] }); redo = []; sfx.drop(); save();
           }
           return drawLinks();
         }
@@ -386,7 +434,7 @@
     },
     leave() {
       removeEventListener('keydown', key); removeEventListener('keyup', key); document.removeEventListener('paste', onPaste);
-      ro?.disconnect(); cancelAnimationFrame(raf); raf = 0; live = drag = erased = linking = null; links = null;
+      ro?.disconnect(); nro?.disconnect(); cancelAnimationFrame(raf); raf = 0; live = drag = erased = linking = null; links = null;
       urls.splice(0).forEach(u => URL.revokeObjectURL(u));
     },
   };

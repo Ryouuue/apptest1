@@ -5,11 +5,13 @@
 const UIS = [
   ['original', 'Original', 'Ink, paper and highlighter. Tempo as you know it', ['#0f1012', '#2e323a', '#d6f24e']],
   ['dev1', 'Development 1', 'Soft lavender workspace with lively motion', ['#d6cff9', '#ffffff', '#8b7bff']],
-  ['dev2', 'Development 2', 'Quiet graph paper with pencil doodles and widgets', ['#f3f4f6', '#16191f', '#ffe45c']],
+  ['dev2', 'Development 2', 'Sticker pop: a dock at the bottom, bold ink and punchy motion', ['#dff3e8', '#1a1e3a', '#ff4f3a']],
+  ['dev2c', 'Development 2 · classic', 'The earlier graph-paper notebook, kept so you can go back', ['#f3f4f6', '#16191f', '#ffe45c']],
 ];
 const UI_ASSETS = {
   dev1: { css: 'css/dev1.css', font: 'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap', face: '600 16px "Plus Jakarta Sans"' },
-  dev2: { css: 'css/dev2.css', font: 'https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..800&family=Caveat:wght@500;700&display=swap', face: '600 16px "Bricolage Grotesque"' },
+  dev2: { css: 'css/dev2.css', font: 'https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;800&family=Bricolage+Grotesque:opsz,wght@12..96,300..800&display=swap', face: '800 16px "Unbounded"' },
+  dev2c: { css: 'css/dev2c.css', font: 'https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..800&family=Caveat:wght@500;700&display=swap', face: '600 16px "Bricolage Grotesque"' },
 };
 const uiName = v => UIS.find(u => u[0] === v)?.[1] || v;
 // The theme's --bg (a hex colour in every theme); body may paint a gradient, so its background-color can be transparent.
@@ -28,7 +30,7 @@ async function loadUI(ui) {
     loadSheet(a.font).catch(() => {}); // fonts are optional: offline, the theme uses system fonts instead of failing
     await Promise.race([loadSheet(a.css), wait(8000).then(() => { throw new Error('timed out'); })]);
   }
-  document.documentElement.dataset.ui = ui;
+  document.documentElement.dataset.ui = ui; window.bootLog?.('theme · ' + ui);
   if (getComputedStyle(document.documentElement).getPropertyValue('--ui').trim() !== ui) throw new Error('its styles did not apply');
   if (a) await Promise.race([document.fonts.load(a.face).catch(() => {}), wait(1500)]);
 }

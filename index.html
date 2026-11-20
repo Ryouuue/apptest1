@@ -4,12 +4,123 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Tempo · study in rhythm</title>
+<!-- Loading screen styles sit inline, before anything else, so the starfield paints while the app files load. -->
+<style>
+#boot{position:fixed;inset:0;z-index:300;background:#05060a radial-gradient(ellipse at 70% 20%,#141a33 0,transparent 60%);color:#e8eaf2;font:13px/1.4 'Segoe UI',system-ui,sans-serif;overflow:hidden;transition:opacity .6s cubic-bezier(.22,1,.36,1),transform .6s cubic-bezier(.22,1,.36,1)}
+#boot.out{opacity:0;transform:scale(1.05);pointer-events:none}
+#boot canvas{position:absolute;inset:0;width:100%;height:100%}
+.bt-mid{position:absolute;left:50%;top:45%;transform:translate(-50%,-50%);display:grid;justify-items:center;gap:8px;text-align:center}
+.bt-mid b{font:700 38px/1 'Sitka Heading',Georgia,serif;letter-spacing:-.01em}
+.bt-mid span{opacity:.55;font-size:14px}
+.bt-mid svg{filter:drop-shadow(0 0 26px rgba(255,140,60,.5));animation:btf 3.2s ease-in-out infinite}
+.bt-bot{position:absolute;left:clamp(16px,7vw,96px);right:clamp(16px,7vw,96px);bottom:34px;display:grid;gap:10px}
+.bt-bar{height:4px;border-radius:4px;background:rgba(255,255,255,.12);overflow:hidden}
+.bt-bar i{display:block;height:100%;width:3%;border-radius:4px;background:linear-gradient(90deg,#ffb347,#d6f24e);box-shadow:0 0 14px #d6f24e;transition:width .4s cubic-bezier(.22,1,.36,1)}
+.bt-st{display:flex;justify-content:space-between;gap:16px;font:12px 'Cascadia Mono',Consolas,monospace;color:#aab3c8}
+.bt-st span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bt-st kbd{border:1px solid rgba(255,255,255,.35);border-radius:4px;padding:0 5px;margin-right:4px;font:inherit;color:#fff}
+#bootLog{position:absolute;left:clamp(16px,7vw,96px);right:clamp(16px,7vw,96px);top:22px;bottom:92px;margin:0;padding:14px 16px;overflow:auto;background:rgba(4,6,14,.84);border:1px solid rgba(255,255,255,.14);border-radius:12px;font:11.5px/1.55 'Cascadia Mono',Consolas,monospace;color:#b9c3d9;white-space:pre;backdrop-filter:blur(4px);animation:btin .3s cubic-bezier(.34,1.56,.64,1)}
+#bootLog .h{color:#ffd27a}#bootLog .ok{color:#86e3ad}#bootLog .dim{color:#6e7891}
+@keyframes btf{50%{transform:translateY(-7px)}}
+@keyframes btin{from{opacity:0;transform:translateY(8px) scale(.98)}}
+@media (prefers-reduced-motion:reduce){.bt-mid svg,#bootLog{animation:none}}
+</style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/app.css">
 </head>
 <body>
+<div id="boot" aria-label="Loading Tempo">
+  <canvas aria-hidden="true"></canvas>
+  <div class="bt-mid"><svg width="84" height="84" viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="btg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffb347"/><stop offset="1" stop-color="#f9480a"/></linearGradient></defs><path d="M32 4c4 10 18 16 18 34a18 18 0 0 1-36 0c0-8 4-12 7-16 1 5 3 7 5 7 0-9 2-16 6-25z" fill="url(#btg)"/><path d="M32 26c2 6 10 9 10 17a10 10 0 0 1-20 0c0-7 7-10 10-17z" fill="#ffe08a" opacity=".5"/><circle cx="25" cy="39" r="5.5" fill="#fff"/><circle cx="39" cy="39" r="5.5" fill="#fff"/><circle cx="25" cy="39" r="2.7" fill="#1b1330"/><circle cx="39" cy="39" r="2.7" fill="#1b1330"/><path d="M28 48q4 3 8 0" stroke="#1b1330" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
+    <b>Tempo</b><span>study in rhythm</span></div>
+  <div class="bt-bot"><div class="bt-bar" role="progressbar" aria-label="Loading Tempo" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
+    <div class="bt-st"><span id="bootMsg" role="status">Waking up…</span><span><kbd>F3</kbd>what is loading</span></div></div>
+  <pre id="bootLog" hidden></pre>
+</div>
+<script>
+// Loading screen: drifting stars, the odd comet, a progress bar fed by real file loads, and an F3 log of what is loading.
+(() => {
+  const t0 = performance.now(), boot = document.getElementById('boot'), cv = boot.querySelector('canvas'), g = cv.getContext('2d');
+  const bar = boot.querySelector('.bt-bar'), msg = document.getElementById('bootMsg'), log = document.getElementById('bootLog'), still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let W = 0, H = 0, stars = [], comets = [], raf = 0, nextComet = 900, last = t0, done = false, pct = 3;
+  const size = () => {
+    const d = devicePixelRatio || 1; W = innerWidth; H = innerHeight; cv.width = W * d; cv.height = H * d; g.setTransform(d, 0, 0, d, 0, 0);
+    stars = Array.from({ length: Math.round(W * H / 3800) }, () => ({ x: Math.random() * W, y: Math.random() * H, z: .15 + Math.random() * .85, p: Math.random() * 6.3 }));
+  };
+  const frame = t => {
+    const dt = Math.min(50, t - last); last = t;
+    g.clearRect(0, 0, W, H); g.fillStyle = '#fff';
+    for (const s of stars) {
+      if (!still) { s.x -= s.z * dt * .007; s.y += s.z * dt * .0018; if (s.x < -2) s.x = W + 2; if (s.y > H + 2) s.y = -2; }
+      g.globalAlpha = .25 + .75 * s.z * (.6 + .4 * Math.sin(t * .0016 * (1 + s.z) + s.p));
+      g.beginPath(); g.arc(s.x, s.y, s.z * 1.35, 0, 6.283); g.fill();
+    }
+    if (!still && (nextComet -= dt) < 0) {
+      nextComet = 1600 + Math.random() * 3200;
+      const top = Math.random() < .6;
+      comets.push({ x: top ? W * (.35 + Math.random() * .65) : W + 20, y: top ? -20 : Math.random() * H * .45, vx: -(.55 + Math.random() * .5), vy: .22 + Math.random() * .3, life: 0, len: 110 + Math.random() * 140 });
+    }
+    for (const c of comets) {
+      c.life += dt; c.x += c.vx * dt; c.y += c.vy * dt;
+      const k = Math.hypot(c.vx, c.vy), tx = c.x - c.vx / k * c.len, ty = c.y - c.vy / k * c.len, gr = g.createLinearGradient(c.x, c.y, tx, ty);
+      gr.addColorStop(0, 'rgba(255,255,255,.95)'); gr.addColorStop(.3, 'rgba(180,205,255,.4)'); gr.addColorStop(1, 'rgba(180,205,255,0)');
+      g.globalAlpha = Math.max(0, Math.min(1, c.life / 200, (1700 - c.life) / 400));
+      g.strokeStyle = gr; g.lineWidth = 2; g.lineCap = 'round'; g.beginPath(); g.moveTo(c.x, c.y); g.lineTo(tx, ty); g.stroke();
+      g.beginPath(); g.arc(c.x, c.y, 1.9, 0, 6.283); g.fill();
+    }
+    comets = comets.filter(c => c.life < 1700); g.globalAlpha = 1;
+    raf = still ? 0 : requestAnimationFrame(frame);
+  };
+  size(); addEventListener('resize', size); raf = requestAnimationFrame(frame);
+
+  // ----- the F3 log -----
+  const lines = [], esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const paint = () => { if (log.hidden) return; log.innerHTML = lines.join('\n'); log.scrollTop = log.scrollHeight; };
+  const add = (s, cls = '') => { lines.push(`<span class="${cls}">${esc(((performance.now() - t0) | 0).toString().padStart(5) + 'ms  ' + s)}</span>`); paint(); };
+  window.bootLog = s => add(s);
+  const progress = () => { bar.firstElementChild.style.width = pct + '%'; bar.setAttribute('aria-valuenow', Math.round(pct)); };
+  const want = new Set(); let got = 0;
+  const kb = n => (n ? (n / 1024).toFixed(1) + ' KB' : 'cached');
+  new PerformanceObserver(list => {
+    for (const e of list.getEntries()) {
+      const u = new URL(e.name, location.href), name = u.origin === location.origin ? u.pathname.slice(1) : u.host + u.pathname;
+      add(`load  ${name.padEnd(30)} ${kb(e.encodedBodySize || e.transferSize).padStart(9)}  ${e.duration | 0}ms`, 'ok');
+      msg.textContent = 'Loading ' + name;
+      if (want.has(u.href) && !done) { got++; pct = Math.max(pct, got / want.size * 90); progress(); }
+    }
+  }).observe({ type: 'resource', buffered: true });
+  document.addEventListener('DOMContentLoaded', () => { for (const el of document.querySelectorAll('script[src],link[rel=stylesheet]')) want.add(new URL(el.src || el.href, location.href).href); });
+  add('tempo · boot', 'h');
+  add('renderer · ' + (navigator.userAgent.match(/(Electron|Chrome)\/[\d.]+/g) || [navigator.userAgent]).join(' · '));
+  if (window.tempoApp) window.tempoApp.boot().then(info => {
+    const v = info.versions;
+    add(`main · electron ${v.electron} · chromium ${v.chrome} · node ${v.node} · v8 ${v.v8} · ${info.packaged ? 'packaged app' : 'dev run'}`, 'h');
+    for (const [t, s] of info.steps) add(`main · +${t}ms ${s}`);
+    add(`main · ${info.modules.length} node modules loaded in the main process:`, 'h');
+    for (const m of info.modules) add('   ' + m, 'dim');
+    add('notes folder · ' + info.notes);
+  }).catch(() => {});
+  else add('shell · plain browser, no desktop bridge: notes stay inside Tempo');
+
+  const hint = () => { if (done) msg.textContent = log.hidden ? 'Ready' : 'Ready. Press F3 or click to continue'; };
+  function leave() {
+    if (boot.classList.contains('out')) return;
+    boot.classList.add('out'); removeEventListener('keydown', onKey, true);
+    setTimeout(() => { cancelAnimationFrame(raf); boot.remove(); }, 650);
+  }
+  const onKey = e => { if (e.key !== 'F3') return; e.preventDefault(); log.hidden = !log.hidden; paint(); hint(); if (log.hidden && done) leave(); };
+  addEventListener('keydown', onKey, true);
+  boot.addEventListener('click', () => done && leave());
+  window.bootDone = () => {
+    if (done) return; done = true; pct = 100; progress();
+    add(`ready · ${(performance.now() - t0) | 0}ms`, 'ok'); hint();
+    setTimeout(() => log.hidden && leave(), Math.max(0, 1500 - (performance.now() - t0))); // long enough to see the sky, never a wait
+  };
+  setTimeout(() => window.bootDone(), 9000); // never trap anyone behind the loader
+})();
+</script>
 <div id="onboard" hidden></div>
 <div id="app" hidden>
   <aside id="side"></aside>

@@ -30,6 +30,15 @@ const ICON = {
   eye: 'M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12zM12 9.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6z',
   eyeoff: 'M3 3l18 18M10.6 5.6A9 9 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-3 3.8M6.7 6.7C4 8.4 2.5 12 2.5 12S6 18.5 12 18.5a9 9 0 0 0 4.9-1.4M10 10a2.8 2.8 0 0 0 4 4',
   focus: 'M4 8.5V4h4.5M15.5 4H20v4.5M20 15.5V20h-4.5M8.5 20H4v-4.5M12 9.5v5M9.5 12h5', panel: 'M4 4h16v16H4zM9.5 4v16', moon: 'M19.5 14.5A8 8 0 0 1 9.5 4.5a8 8 0 1 0 10 10z',
+  chevR: 'M9 6l6 6-6 6', chevD: 'M6 9l6 6 6-6', list: 'M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01', olist: 'M10 6h10M10 12h10M10 18h10M4 4.5h1.5V9M4 14.5c0-1 2.8-1 2.8.4 0 1.2-2.8 1.8-2.8 3.1h3',
+  checksq: 'M4 4h16v16H4zM8 12l3 3 5-6', table: 'M4 5h16v14H4zM4 10h16M4 15h16M10 5v14', code: 'M8 7l-5 5 5 5M16 7l5 5-5 5M14 4l-4 16',
+  link: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1', quote: 'M5 10h4v5H5zM5 10c0-3 1.5-4.5 4-5M14 10h4v5h-4zM14 10c0-3 1.5-4.5 4-5',
+  palette: 'M12 3a9 9 0 1 0 0 18c1.5 0 2-1 2-2 0-1.4-1.3-1.7-1.3-3 0-1 .8-2 2.3-2H17a4 4 0 0 0 4-4c0-4-4-7-9-7zM7.5 11h.01M10 7h.01M15 7.5h.01',
+  layout: 'M4 4h16v16H4zM4 9h16M10 9v11', folder: 'M3 6.5V18a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1V8.5a1 1 0 0 0-1-1h-8L10 5H4a1 1 0 0 0-1 1.5z', upload: 'M12 16V5M7 9l5-5 5 5M5 20h14',
+  camera: 'M4 8h3l2-3h6l2 3h3v11H4zM12 11a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', sigma: 'M18 5H6l6 7-6 7h12', flow: 'M4 4h6v5H4zM14 15h6v5h-6zM7 9v4h10v2', more: 'M5 12h.01M12 12h.01M19 12h.01',
+  divider: 'M4 12h16M4 7h.01M8 7h.01M12 7h.01M16 7h.01M20 7h.01M4 17h.01M8 17h.01M12 17h.01M16 17h.01M20 17h.01', curve: 'M4 19c2-9 7-13 15-13M14 2.5l5 3.5-4 4.5',
+  connect: 'M5 12a2 2 0 1 0 0-.01M19 12a2 2 0 1 0 0-.01M7 12h10', nodeic: 'M4 5h16v14H4zM8 9h8M8 13h6', deck: 'M7 4h12v14H7zM4 7v13h12', callout: 'M4 5h16v10H9l-5 4zM8 9h8M8 12h5',
+  footnote: 'M4 18h10M4 12h10M4 6h7M17 4h2v5M17 9h3',
 };
 const icon = (n, s = 20, w = 1.8) => `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${ICON[n]}"/></svg>`;
 
@@ -62,7 +71,8 @@ const fresh = () => ({
   // aiMode 'login' = sign in through Puter (no key); 'key' = the user's own provider API key. lmodels are the sign-in model ids.
   settings: { theme: 'dark', sfx: true, notes: 'local', ai: 'claude', aiMode: 'login', keys: {}, models: { claude: 'claude-opus-5-5', gemini: 'gemini-2.5-flash', openai: 'gpt-4o-mini' },
     lmodels: { claude: 'claude-sonnet-5', gemini: 'gemini-3.5-flash-lite', openai: 'gpt-5.5' }, spotifyId: '', ui: 'original', tidy: {}, navMini: false, geo: null },
-  sessions: [], events: [], notes: [], board: { strokes: [], stickies: [], images: [], links: [], view: { x: 0, y: 0, z: 1 } },
+  // topics: the Notes front page blocks; notes belong to one (n.topic) and may nest (n.parent). decks: flashcard folders. fonts: user-added note fonts.
+  sessions: [], events: [], notes: [], topics: [], decks: [], fonts: [], board: { strokes: [], stickies: [], images: [], links: [], view: { x: 0, y: 0, z: 1 } },
   quizzes: [], courses: [], notifs: [], ach: {}, chat: [], xp: 0, timer: null, spotify: null, nudged: '',
   cards: [], lessons: [], frozen: [], freezes: 1, reviews: 0, chests: 0, day: null, seeded: false, recapWeek: '',
   // To-do: lock = break-room lockdown after 4 idle days, cleared only by finishing a task. pts = shop points.
@@ -81,6 +91,19 @@ function load() {
 }
 let user = localStorage.getItem('tempo:session') || null;
 let S = load();
+window.bootLog?.(`store · ${((localStorage.getItem(KEY(user)) || '').length / 1024).toFixed(1)} KB from localStorage · ${S.notes.length} notes · ${S.cards.length} cards`);
+
+// Pictures and fonts are blobs in IndexedDB (localStorage is far too small); app data keeps only their ids.
+const idb = (() => {
+  let dbP;
+  const db = () => (dbP ||= new Promise((res, rej) => { const r = indexedDB.open('tempo', 1); r.onupgradeneeded = () => r.result.createObjectStore('img'); r.onsuccess = () => res(r.result); r.onerror = () => { dbP = null; rej(r.error); }; }));
+  const run = (mode, fn) => db().then(d => new Promise((res, rej) => { const tx = d.transaction('img', mode), q = fn(tx.objectStore('img')); tx.oncomplete = () => res(q.result); tx.onerror = () => rej(tx.error); }));
+  return { get: k => run('readonly', s => s.get(k)), put: (k, v) => run('readwrite', s => s.put(v, k)), del: k => run('readwrite', s => s.delete(k)) };
+})();
+// Object URLs for stored pictures, cached so re-renders do not leak a URL each time.
+const imgUrls = new Map();
+const imgURL = id => (imgUrls.has(id) ? Promise.resolve(imgUrls.get(id)) : idb.get(id).then(b => { if (!b) return ''; const u = URL.createObjectURL(b); imgUrls.set(id, u); return u; }));
+const hydrate = root => $$('img[data-img]', root).forEach(im => imgURL(im.dataset.img).then(u => { if (u) im.src = u; else im.classList.add('missing'); }).catch(() => im.classList.add('missing')));
 let saveT = 0;
 function saveNow() {
   clearTimeout(saveT); saveT = 0;
@@ -213,10 +236,11 @@ ACT.closeModal = closeModal;
 function popover(anchor, html) {
   const old = $('.pop'); if (old) { old.remove(); if (old._a === anchor) return null; }
   const p = document.createElement('div'), r = anchor.getBoundingClientRect(), up = r.top > innerHeight / 2;
+  const left = r.right < 372; // near the left edge the popover hangs to the right of its button instead
   p.className = 'pop'; p.innerHTML = html; p._a = anchor;
-  p.style.right = Math.max(12, innerWidth - r.right) + 'px';
+  if (left) p.style.left = Math.max(12, r.left) + 'px'; else p.style.right = Math.max(12, innerWidth - r.right) + 'px';
   p.style[up ? 'bottom' : 'top'] = (up ? innerHeight - r.top : r.bottom) + 10 + 'px';
-  p.style.transformOrigin = (up ? 'bottom' : 'top') + ' right';
+  p.style.transformOrigin = (up ? 'bottom ' : 'top ') + (left ? 'left' : 'right');
   layer().append(p); return p;
 }
 document.addEventListener('pointerdown', e => { const p = $('.pop'); if (p && !p.contains(e.target) && !p._a.contains(e.target)) p.remove(); });

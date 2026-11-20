@@ -17,6 +17,18 @@ ACT.calDay = el => go('calendar', el.dataset.d);
 ACT.quote = () => { const q = $('#quote'); quoteI = (quoteI + 1) % QUOTES.length; q.textContent = '“' + QUOTES[quoteI] + '”'; q.style.animation = 'none'; void q.offsetWidth; q.style.animation = 'rise .35s var(--out)'; };
 ACT.addBlock = () => { const p = S.profile; S.events.push({ id: uid(), d: today(), time: String(p.hour).padStart(2, '0') + ':00', title: `${p.pomo}-min focus block`, type: 'study' }); save(); sfx.ok(); go('home'); };
 ACT.nextLesson = () => go('learn');
+// "What should we learn today?": the question goes straight to the AI tutor; chips are shortcuts built from the user's own data.
+ACT.homeAsk = el => { const t = el?.dataset?.q || $('#haIn')?.value.trim(); if (!t) { replay($('#haIn'), 'shake'); return sfx.bad(); } ACT.askTutor(t); };
+function askChips(st) {
+  const due = S.cards.filter(c => c.due <= st.t).length, tp = [...(S.topics || [])].sort((a, b) => b.upd - a.upd)[0], task = S.tasks.find(x => !x.done && x.src === 'note');
+  return [
+    due && [`🃏 ${due} card${due === 1 ? '' : 's'} due`, '', 'cards'],
+    tp && [`❓ Quiz me on ${tp.title}`, `Quiz me with 3 questions on ${tp.title}. Ask one at a time and wait for my answer.`],
+    task && [`✏️ ${task.t.slice(0, 34)}`, `Help me with this study task, step by step: ${task.t}`],
+    ['🗺️ Plan today', `Plan my study for today: about ${S.profile.daily} minutes in ${S.profile.pomo}-minute blocks.${tp ? ' My latest topic is ' + tp.title + '.' : ''}`],
+    ['📝 Make notes', '', 'notes'],
+  ].filter(Boolean).slice(0, 4);
+}
 
 PAGES.home = {
   render(root) {
@@ -52,11 +64,15 @@ PAGES.home = {
           ${QUESTS.map(q => { const [a, b] = q.p(st), ok = a >= b; return `<div class="quest ${ok ? 'done' : ''}"><span class="e">${ok ? '✅' : q.e}</span><div class="grow"><b>${q.t()}</b><div class="pbar" style="margin-top:4px"><div><b style="width:${Math.min(100, a / b * 100)}%"></b></div><span>${Math.min(a, b)}/${b}</span></div></div></div>`; }).join('')}
           <p class="muted" style="margin-top:8px;font-size:12px">${day.chest ? '🗝️ Chest opened today. New quests at midnight.' : 'Clear all three for +30 XP and a streak freeze.'}</p></section>
       </div>
-      <section class="card aux"><h2>Pick up where you left off</h2><div class="two" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px">
+      <div class="two pick-row"><section class="card ask-card"><div class="ask-h">${ember(46, m)}<h2>What should we learn today, ${esc(p.name)}?</h2></div>
+        <form class="ask-f" id="homeAsk" novalidate><label class="sr" for="haIn">Ask Ember anything you want to learn</label><input class="inp" id="haIn" maxlength="500" placeholder="e.g. Explain ionic bonding with an example" autocomplete="off"><button class="btn" aria-label="Ask Ember">${icon('send', 18)}</button></form>
+        <div class="ask-chips">${askChips(st).map(([l, q, page]) => page ? `<button class="nf-chip" data-act="go" data-p="${page}">${esc(l)}</button>` : `<button class="nf-chip" data-act="homeAsk" data-q="${esc(q)}">${esc(l)}</button>`).join('')}</div>
+        <small class="muted">${aiReady() ? 'Answers open in the AI Tutor.' : 'Sign in on the AI Tutor page once; then ask from here.'}</small></section>
+      <section class="card aux"><h2>Pick up where you left off</h2><div class="pick-grid">
         <button class="next" style="margin:0" data-act="nextLesson"><span style="font-size:26px">🧩</span><span class="grow"><b>${lesson ? esc(lesson.t) : 'Start a course'}</b><br><small class="muted">${course ? esc(course.name) : 'Turn a note into lessons'}</small></span></button>
         <button class="next" style="margin:0" data-act="go" data-p="cards"><span style="font-size:26px">🃏</span><span class="grow"><b>${due ? due + ' cards due' : 'Flashcards'}</b><br><small class="muted">${due ? 'Two minutes of review' : S.cards.length ? 'All caught up' : 'Make them from your notes'}</small></span></button>
-        <button class="next" style="margin:0" data-act="go" data-p="notes"><span style="font-size:26px">📝</span><span class="grow"><b>${lastNote ? esc(lastNote.title) : 'Notes'}</b><br><small class="muted">${lastNote ? 'Edited ' + ago(lastNote.upd) : 'Write the first one'}</small></span></button>
-        <button class="next" style="margin:0" data-act="go" data-p="board"><span style="font-size:26px">🗂️</span><span class="grow"><b>Your Big Archive</b><br><small class="muted">${st.stickies} sticky notes</small></span></button></div></section>
+        <button class="next" style="margin:0" ${lastNote ? `data-act="noteOpen" data-id="${lastNote.id}"` : 'data-act="go" data-p="notes"'}><span style="font-size:26px">📝</span><span class="grow"><b>${lastNote ? esc(lastNote.title) : 'Notes'}</b><br><small class="muted">${lastNote ? 'Edited ' + ago(lastNote.upd) : 'Write the first one'}</small></span></button>
+        <button class="next" style="margin:0" data-act="go" data-p="board"><span style="font-size:26px">🗂️</span><span class="grow"><b>Your Big Archive</b><br><small class="muted">${st.stickies} sticky notes</small></span></button></div></section></div>
       <section class="card aux"><h2>This week <span class="right row" style="gap:10px"><span class="muted" style="font:500 13px var(--font)">${st.totalMin} min all time</span><button class="btn sm ghost" data-act="recap">Weekly recap</button></span></h2>${barChart(7)}</section>
     </div><aside class="rail aux" aria-label="Overview">
       <section class="card now-w"><div class="now-t mono" data-clock="t"></div><div class="muted" data-clock="d"></div><button class="now-wx" data-act="wxSet" data-wx title="Weather location">…</button></section>
@@ -65,6 +81,7 @@ PAGES.home = {
       <section class="card"><h2>Recent activity</h2>${feed.length ? feed.map(f => `<div class="act"><span>${f.e}</span><span class="grow">${esc(f.x)}</span><small class="muted">${ago(f.t)}</small></div>`).join('') : '<div class="empty">Your first session will show up here.</div>'}</section>
     </aside></div>`;
     $$('[data-n]', root).forEach(el => countUp(el, +el.dataset.n));
+    $('#homeAsk', root).onsubmit = e => { e.preventDefault(); ACT.homeAsk(); };
     clocks(); paintWeather();
   },
 };

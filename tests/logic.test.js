@@ -36,7 +36,43 @@ assert.equal(L.levelOf(400).level, 3);
 const html = L.md('# Hi <script>alert(1)</script>\n- **bold** [[A"><img src=x onerror=1>]]\n```\n<b>raw</b>\n```');
 assert.ok(!/<script|<img/.test(html));
 assert.ok(html.includes('<h1>') && html.includes('<li><b>bold</b>') && html.includes('&lt;b&gt;raw'));
-assert.deepEqual(L.links('see [[One]] and [[ Two ]]'), ['One', 'Two']);
+assert.deepEqual(L.links('see [[One]] and [[ Two ]] and [[Three|alias]]'), ['One', 'Two', 'Three']);
+
+// Obsidian-flavoured markdown
+const ob = s => L.md(s);
+assert.ok(ob('###### Six').includes('<h6>Six</h6>'));
+assert.ok(ob('a\n\n---\n\nb').includes('<hr>'));
+assert.ok(ob('> [!tip] Remember\n> body').includes('class="callout" data-c="tip"'));
+assert.ok(ob('> [!warning]- Folded\n> x').includes('<details class="callout"'));
+assert.ok(!ob('hi %%secret%% there').includes('secret') && !ob('%%\nhidden\n%%').includes('hidden'));
+assert.ok(ob('\\*not italic\\*').includes('*not italic*') && !ob('\\*x\\*').includes('<i>'));
+assert.ok(ob('***both***').includes('<b><i>both</i></b>'));
+assert.ok(ob('~~gone~~').includes('<s>gone</s>') && ob('==mark==').includes('<mark>mark</mark>') && ob('`c*o*de`').includes('<code>c*o*de</code>'));
+assert.ok(ob('__b__ _i_').includes('<b>b</b> <i>i</i>'));
+assert.ok(ob('- [ ] todo\n- [x] done').includes('data-line="1" checked'));
+assert.ok(ob('1) one\n2) two').startsWith('<ol>'));
+assert.ok(ob('- a\n    - b').includes('<ul><li>a</li><ul><li>b</li></ul></ul>'));
+assert.ok(ob('```python\nx = 1\n```').includes('class="language-python"'));
+assert.ok(ob('```mermaid\ngraph TD; A-->B\n```').includes('mermaid-src'));
+assert.ok(ob('| A | B |\n| --- | :-: |\n| 1 | 2 |').includes('<td style="text-align:center">2</td>'));
+assert.ok(ob('Energy $E=mc^2$ ok').includes('data-tex="E=mc^2"') && ob('$$\nx^2\n$$').includes('class="math blk"'));
+assert.ok(!ob('costs $5 and $10').includes('math'));
+assert.ok(ob('Fact[^1]\n\n[^1]: Source').includes('title="Source"'));
+assert.ok(ob('Inline^[a note] here').includes('<section class="fns">'));
+assert.ok(ob('<span style="color:#e11d48">red</span>').includes('<span style="color:#e11d48">red</span>'));
+assert.ok(!/<span[^>]*onerror|<script/.test(ob('<span style="color:red" onerror=x>x</span><script>1</script>')));
+assert.ok(!/href="javascript|src="javascript/.test(ob('[x](javascript:alert(1)) ![y](javascript:1)')));
+assert.ok(ob('![p](tempo-img:abc123)').includes('data-img="abc123"'));
+assert.ok(ob('```chart\ntype: pie\nA: 3\nB: 1\n```').includes('class="chart"'));
+assert.ok(ob('see [[Note|that one]]').includes('data-t="Note">that one</a>'));
+assert.ok(ob('#biology and &#39;').includes('<span class="tag">#biology</span>'));
+assert.deepEqual(L.blocks('a\nb\n\n```\nx\n\ny\n```\n\nc').map(b => [b.s, b.e]), [[0, 2], [3, 8], [9, 10]]);
+assert.equal(L.blocks('$$\na\n\nb\n$$').length, 1);
+assert.equal(L.plain('## Hi **there** [[x]]'), 'Hi there x');
+assert.deepEqual(L.studySteps('## Ions\n**Cation** is a positive ion here'), ['Study Ions', 'Memorise Cation']);
+assert.equal(L.studySteps('').length, 3);
+assert.equal(L.validNotes({ title: 'T', notes: [{ title: 'a', body: 'x', kids: [{ title: 'b' }, 5] }, { nope: 1 }] }).notes[0].kids.length, 1);
+assert.deepEqual(L.validNotes(null).notes, []);
 
 // quizzes
 const notes = [{ body: '**Mitochondria** make most of the cell energy\nOsmosis: movement of water across a membrane\nA ribosome is the place where proteins are built\n- **Nucleus** stores the genetic material' }];

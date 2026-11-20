@@ -7,15 +7,17 @@
   const find = id => S.tasks.find(x => x.id === id);
   const repaint = () => (cur === 'todo' ? go('todo') : refresh());
 
-  function addTask(text, due = '', time = '', src) {
+  // note: id of the note the task was planned from (notes.js adds study steps through this).
+  function addTask(text, due = '', time = '', src, note) {
     const t = String(text).trim().replace(/\s+/g, ' ');
     if (t.length < 2) throw new Error('Give the task a few words.');
     if (S.tasks.some(x => !x.done && x.t.toLowerCase() === t.toLowerCase())) throw new Error('That task is already on the list.');
     if (S.tasks.filter(x => !x.done).length >= 200) throw new Error('200 open tasks is the limit. Finish or delete a few first.');
     if (S.tasks.length > 400) S.tasks = S.tasks.filter(x => !x.done || Date.now() - x.done < 30 * 864e5); // forget old finished tasks
-    const x = { id: uid(), t: t.slice(0, 140), add: Date.now(), perf: performance.now(), ses: SES, due, time, done: 0, paid: 0, ...(src && { src }) };
+    const x = { id: uid(), t: t.slice(0, 140), add: Date.now(), perf: performance.now(), ses: SES, due, time, done: 0, paid: 0, ...(src && { src }), ...(note && { note }) };
     S.tasks.push(x); save(); return x;
   }
+  window.addTask = addTask;
 
   function complete(x, from) {
     const now = Date.now(), t = today(), day = dayState(), frog = S.todo.frog?.d === t && S.todo.frog.id === x.id, early = frog && new Date().getHours() < 12;
@@ -81,6 +83,7 @@
     return `<li class="task ${x.done ? 'done' : ''} ${frog ? 'frog' : ''}">
       <button class="tick ${x.done ? 'on' : ''} ${wait ? 'wait' : ''}" data-act="taskCross" data-id="${x.id}" aria-label="${x.done ? 'Uncross' : 'Cross off'}: ${esc(x.t)}${wait ? `, available in ${mins} minutes` : ''}" title="${wait ? `Can be crossed off in ${mins} min` : x.done ? 'Uncross (refunds the points)' : 'Cross off'}">${wait ? `<small>${mins}m</small>` : ''}</button>
       <span class="t-text">${frog ? '<b class="frogb" title="Frog of the day">🐸</b> ' : ''}<span class="t-in">${esc(x.t)}<svg class="strike" viewBox="0 0 100 12" preserveAspectRatio="none" aria-hidden="true"><path pathLength="100" d="M1 7C14 3 22 9 36 6S62 3 74 7 92 5 99 6"/></svg></span>${x.src === 'ai' ? ' <small class="muted" title="Added from a photo">✨</small>' : ''}</span>
+      ${x.note && S.notes.some(n => n.id === x.note) ? `<button class="icb sm" data-act="noteOpen" data-id="${x.note}" title="Open the note this came from" aria-label="Open the note for ${esc(x.t)}">${icon('note', 16)}</button>` : ''}
       ${x.due && !x.done ? `<span class="due ${x.due < t ? 'late' : ''}">${x.due === t ? 'Today' : L.parseKey(x.due).toLocaleDateString('en', { day: 'numeric', month: 'short' })}${x.time ? ' · ' + x.time : ''}</span>` : ''}
       ${x.done ? '' : `<button class="icb sm" data-act="taskFrog" data-id="${x.id}" aria-pressed="${frog}" title="${frog ? 'Unmark frog' : 'Make this the frog of the day'}" aria-label="Frog of the day">🐸</button>`}
       <button class="icb sm" data-act="taskDel" data-id="${x.id}" aria-label="Delete ${esc(x.t)}">${icon('trash', 16)}</button></li>`;

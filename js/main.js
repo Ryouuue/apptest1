@@ -6,7 +6,7 @@ function enterApp() {
   if (!S.profile) return startOnboarding();
   if (!S.seeded) { S.seeded = true; S.courses.unshift({ id: uid(), ...structuredClone(L.COURSE) }); save(); } // everyone starts with one ready-made course
   $('#onboard').hidden = true; $('#app').hidden = false; $('#app').classList.toggle('mini', !!S.settings.navMini);
-  initTimer(); S.timer.mode ||= 'focus'; dayState(); bootUI();
+  initTimer(); S.timer.mode ||= 'focus'; dayState(); window.uiReady = bootUI();
   // A missed yesterday is covered by a streak freeze when one is in reserve.
   const fz = L.applyFreeze(stats().days, S.frozen, S.freezes, today());
   if (fz.used) { S.frozen = fz.frozen; S.freezes = fz.freezes; save(); notify(`A streak freeze covered ${fz.used}. Your streak is safe.`, '🧊'); }
@@ -80,3 +80,6 @@ addEventListener('hashchange', () => { const id = location.hash.slice(1); if (!$
 
 spBoot(); // reads ?code= from a Spotify redirect before the router rewrites the URL
 enterApp();
+window.bootLog?.(`app · ${Object.keys(PAGES).length} pages ready · ${S.profile ? 'opened ' + cur : 'first run survey'}`);
+// The loading screen leaves once the saved theme and the fonts are in (or after 6 s, whichever comes first).
+Promise.race([Promise.all([window.uiReady, document.fonts.ready]), wait(6000)]).finally(() => window.bootDone?.());
