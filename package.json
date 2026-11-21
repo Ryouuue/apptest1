@@ -18,7 +18,7 @@
   "build": {
     "appId": "app.tempo.study",
     "productName": "Tempo",
-    "files": ["index.html", "css/**", "js/**", "wallpaper/**", "electron/main.js", "electron/preload.js"],
+    "files": ["index.html", "css/**", "js/**", "wallpaper/**", "electron/main.js", "electron/preload.js", "electron/media.js"],
     "directories": { "output": "dist" },
     "win": { "target": [{ "target": "portable", "arch": ["x64"] }], "icon": "build/icon.png" },
     "portable": { "artifactName": "Tempo.exe" }

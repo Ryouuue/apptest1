@@ -101,7 +101,7 @@ ACT.obSetup = () => {
   if (ob.retake) { obCommit(); enterApp(); return toast('Profile updated.'); }
   ob.mode = 'setup';
   obEl().innerHTML = `<div class="ob-body" style="max-width:880px"><div class="sv-side">${ember(54)}<span class="mono">LAST STEP</span></div><h1 class="sv-q">Make Tempo yours, ${obName()}.</h1>
-    <label class="f">Theme</label><div class="pick">${pickCards('theme', THEMES)}</div>
+    <label class="f">Theme</label><div class="pick pick4">${pickCards('theme', THEMES)}</div>
     <label class="f">Where should notes live?</label><div class="pick">${pickCards('notes', NOTE_HOMES)}</div>
     <label class="f">Which AI tutor?</label><div class="pick">${pickCards('ai', AI_PICKS)}</div>
     <div class="row" style="margin-top:28px;justify-content:space-between"><span class="muted">All of this can change later in Settings.</span><button class="btn big" data-act="obAccount">Continue ${icon('right')}</button></div></div>`;

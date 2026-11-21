@@ -38,7 +38,9 @@ const ICON = {
   camera: 'M4 8h3l2-3h6l2 3h3v11H4zM12 11a3 3 0 1 0 0 6 3 3 0 0 0 0-6z', sigma: 'M18 5H6l6 7-6 7h12', flow: 'M4 4h6v5H4zM14 15h6v5h-6zM7 9v4h10v2', more: 'M5 12h.01M12 12h.01M19 12h.01',
   divider: 'M4 12h16M4 7h.01M8 7h.01M12 7h.01M16 7h.01M20 7h.01M4 17h.01M8 17h.01M12 17h.01M16 17h.01M20 17h.01', curve: 'M4 19c2-9 7-13 15-13M14 2.5l5 3.5-4 4.5',
   connect: 'M5 12a2 2 0 1 0 0-.01M19 12a2 2 0 1 0 0-.01M7 12h10', nodeic: 'M4 5h16v14H4zM8 9h8M8 13h6', deck: 'M7 4h12v14H7zM4 7v13h12', callout: 'M4 5h16v10H9l-5 4zM8 9h8M8 12h5',
-  footnote: 'M4 18h10M4 12h10M4 6h7M17 4h2v5M17 9h3',
+  footnote: 'M4 18h10M4 12h10M4 6h7M17 4h2v5M17 9h3', user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4.5 21a7.5 7.5 0 0 1 15 0',
+  medal: 'M8 2.5h8l-2.5 6h-3zM12 9a6 6 0 1 0 0 12 6 6 0 0 0 0-12zM12 12.2l1 2.1 2.2.3-1.6 1.5.4 2.2-2-1.1-2 1.1.4-2.2-1.6-1.5 2.2-.3z',
+  grip: 'M15 21l6-6M10 21l11-11', pushup: 'M12 19V7M7 11l5-5 5 5M5 3h14',
 };
 const icon = (n, s = 20, w = 1.8) => `<svg class="ic" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${ICON[n]}"/></svg>`;
 
@@ -69,10 +71,12 @@ const KEY = u => (u ? 'tempo:data:' + u : 'tempo:guest');
 const fresh = () => ({
   profile: null,
   // aiMode 'login' = sign in through Puter (no key); 'key' = the user's own provider API key. lmodels are the sign-in model ids.
-  settings: { theme: 'dark', sfx: true, notes: 'local', ai: 'claude', aiMode: 'login', keys: {}, models: { claude: 'claude-opus-5-5', gemini: 'gemini-2.5-flash', openai: 'gpt-4o-mini' },
+  settings: { theme: 'default', sfx: true, notes: 'local', ai: 'claude', aiMode: 'login', keys: {}, models: { claude: 'claude-opus-5-5', gemini: 'gemini-2.5-flash', openai: 'gpt-4o-mini' },
     lmodels: { claude: 'claude-sonnet-5', gemini: 'gemini-3.5-flash-lite', openai: 'gpt-5.5' }, spotifyId: '', ui: 'original', tidy: {}, navMini: false, geo: null },
   // topics: the Notes front page blocks; notes belong to one (n.topic) and may nest (n.parent). decks: flashcard folders. fonts: user-added note fonts.
-  sessions: [], events: [], notes: [], topics: [], decks: [], fonts: [], board: { strokes: [], stickies: [], images: [], links: [], view: { x: 0, y: 0, z: 1 } },
+  // boards: Big Archive boards (each has its own strokes, notes, pictures and arrows). qsets: saved quizzes; quizzes is the log of finished runs.
+  // usage: seconds the app was open and in front, per day. look: profile cosmetics (title badge now, shop items later).
+  sessions: [], events: [], notes: [], topics: [], decks: [], fonts: [], boards: [], qsets: [], usage: {}, look: {},
   quizzes: [], courses: [], notifs: [], ach: {}, chat: [], xp: 0, timer: null, spotify: null, nudged: '',
   cards: [], lessons: [], frozen: [], freezes: 1, reviews: 0, chests: 0, day: null, seeded: false, recapWeek: '',
   // To-do: lock = break-room lockdown after 4 idle days, cleared only by finishing a task. pts = shop points.
@@ -84,9 +88,14 @@ function load() {
   try {
     const d = JSON.parse(raw);
     const s = d.settings || {}, keys = { ...s.keys };
-    return { ...f, ...d, board: { ...f.board, ...d.board }, todo: { ...f.todo, ...d.todo }, ember: { ...f.ember, ...d.ember },
+    const out = { ...f, ...d, todo: { ...f.todo, ...d.todo }, ember: { ...f.ember, ...d.ember },
       settings: { ...f.settings, ...s, keys, models: { ...f.settings.models, ...s.models }, lmodels: { ...f.settings.lmodels, ...s.lmodels },
       aiMode: s.aiMode || (Object.keys(keys).length ? 'key' : 'login') } }; // data saved before sign-in existed keeps using its keys
+    // The single board from before Archive boards existed becomes the first board.
+    const b = d.board;
+    if (b && !out.boards.length && [b.strokes, b.stickies, b.images, b.links].some(a => a?.length)) out.boards = [{ id: uid(), title: 'My archive', cover: null, upd: Date.now(), strokes: [], stickies: [], images: [], links: [], view: { x: 0, y: 0, z: 1 }, ...b }];
+    delete out.board;
+    return out;
   } catch { localStorage.setItem(KEY(user) + ':corrupt', raw); return f; } // keep the unreadable copy instead of overwriting it
 }
 let user = localStorage.getItem('tempo:session') || null;
@@ -113,6 +122,27 @@ function saveNow() {
 const save = () => { saveT ||= setTimeout(saveNow, 300); };
 addEventListener('pagehide', () => saveT && saveNow());
 const applyTheme = () => { document.documentElement.dataset.theme = S.settings.theme; };
+
+// Covers: a photo (IndexedDB id) or, with none, a doodle generated from the id, so every topic, quiz, course and board looks different but stays the same.
+const hue = s => [...String(s)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
+function coverArt(t) {
+  if (t.cover) return `<img class="cov" data-img="${t.cover}" alt="">`;
+  let sd = hue(t.id) * 7919 + 13; const r = () => (sd = sd * 16807 % 2147483647) / 2147483647;
+  const shapes = Array.from({ length: 5 }, (_, i) => {
+    const x = (r() * 300).toFixed(0), y = (r() * 150).toFixed(0), s = 10 + r() * 30;
+    return [`<circle cx="${x}" cy="${y}" r="${s.toFixed(0)}"/>`, `<path d="M${x} ${y}q${s} -${s} ${s * 2} 0t${s * 2} 0t${s * 2} 0"/>`, `<rect x="${x}" y="${y}" width="${s.toFixed(0)}" height="${s.toFixed(0)}" rx="4" transform="rotate(${(r() * 40).toFixed(0)} ${x} ${y})"/>`,
+      `<path d="M${x} ${+y - s}v${s * 2}M${+x - s} ${y}h${s * 2}"/>`][i % 4];
+  }).join('');
+  return `<svg class="cov def" viewBox="0 0 320 160" preserveAspectRatio="xMidYMid slice" aria-hidden="true" style="--h:${hue(t.id)}"><rect class="c0" width="320" height="160"/><g class="c1">${shapes}</g><text class="ci" x="22" y="138">${esc([...(t.title || t.name || '?')][0] || '?')}</text></svg>`;
+}
+// Picks a picture, shrinks it and stores it in IndexedDB; resolves to its id (null when cancelled).
+async function pickImage() {
+  const inp = Object.assign(document.createElement('input'), { type: 'file', accept: 'image/*' });
+  const f = await new Promise(res => { inp.onchange = () => res(inp.files[0]); inp.click(); });
+  if (!f?.type.startsWith('image/')) return null;
+  const c = await shrinkImage(f, 1400), blob = await new Promise(r => c.toBlob(r, 'image/jpeg', .86)), id = uid();
+  await idb.put(id, blob); return id;
+}
 
 // ---------- accounts (local only; passwords are PBKDF2-hashed, never stored) ----------
 const accounts = () => { try { return JSON.parse(localStorage.getItem('tempo:accounts')) || {}; } catch { return {}; } };
@@ -310,7 +340,7 @@ function stats() {
   return {
     t, days, streak: L.streak(new Set([...days, ...S.frozen]), t), weeks: L.weekStreak(days, t), todayMin: sum(s => s.d === t), totalMin: sum(() => true),
     lessons: S.lessons.length, reviews: S.reviews, chests: S.chests,
-    sessions: S.sessions.length, quizzes: S.quizzes.length, perfect: S.quizzes.some(q => q.score === q.total), stickies: S.board.stickies.length,
+    sessions: S.sessions.length, quizzes: S.quizzes.length, perfect: S.quizzes.some(q => q.score === q.total), stickies: S.boards.reduce((n, b) => n + b.stickies.length, 0),
     notes: S.notes.length, night: S.sessions.some(s => s.h >= 22 || s.h < 4), early: S.sessions.some(s => s.h >= 4 && s.h < 8),
     chapters, coursesDone: S.courses.filter(c => c.ch.length && c.ch.every(x => x.done)).length, level: L.levelOf(S.xp).level,
     tasksDone: S.todo.doneCount, frogs: S.todo.frogs,
@@ -374,6 +404,13 @@ function logSession(mins, sub = 'Focus') {
   if (a.todayMin < goal && b.todayMin >= goal) notify(`Daily goal reached: ${b.todayMin} of ${goal} min`, '🎯');
   checkAch(); emberCheck(); save(); refresh();
 }
+// Screen time: every 30 s the app is open and in front counts toward today (kept for 120 days).
+setInterval(() => {
+  if (document.hidden || $('#app').hidden || !S.profile) return;
+  const t = today(); S.usage[t] = (S.usage[t] || 0) + 30;
+  const ks = Object.keys(S.usage).sort(); if (ks.length > 120) delete S.usage[ks[0]];
+  save();
+}, 30000);
 function barChart(n) {
   const by = {}; for (const s of S.sessions) by[s.d] = (by[s.d] || 0) + s.m;
   const t = today(), keys = Array.from({ length: n }, (_, i) => L.addDays(t, i - n + 1)), max = Math.max(S.profile?.daily || 30, ...keys.map(k => by[k] || 0));
@@ -384,7 +421,8 @@ function barChart(n) {
 }
 
 // ---------- settings pick cards (used by onboarding and Settings) ----------
-const THEMES = [['dark', 'Ink', 'Dark, easy on late-night eyes', ['#0f1012', '#2e323a', '#d6f24e']], ['light', 'Paper', 'Light, warm and crisp', ['#f3f0e7', '#d6d1c1', '#d6f24e']], ['rose', 'Rose', 'Soft and warm', ['#fbe8ee', '#efc2d0', '#ff9dbd']]];
+// Default follows each UI theme's own palette; Ink, Paper and Rose repaint every UI theme (see the [data-theme] blocks in each sheet).
+const THEMES = [['default', 'Default', 'The UI theme’s own colours', ['#cfc6f8', '#ff4f3a', '#d6f24e']], ['dark', 'Ink', 'Dark, easy on late-night eyes', ['#0f1012', '#2e323a', '#d6f24e']], ['light', 'Paper', 'Light, warm and crisp', ['#f3f0e7', '#d6d1c1', '#d6f24e']], ['rose', 'Rose', 'Soft and warm', ['#fbe8ee', '#efc2d0', '#ff9dbd']]];
 const NOTE_HOMES = [['local', 'In Tempo', 'Stored on this PC, works offline'], ['obsidian', 'Obsidian vault', 'Reads and writes .md files in your vault folder'], ['gemini', 'Gemini', 'Notes in Tempo; Gemini summarises and quizzes them']];
 const AI_PICKS = [['claude', 'Claude', 'by Anthropic'], ['gemini', 'Gemini', 'by Google'], ['openai', 'ChatGPT', 'by OpenAI']];
 const pickCards = (k, list) => list.map(([v, b, d, sw]) => `<button type="button" class="${S.settings[k] === v ? 'on' : ''}" aria-pressed="${S.settings[k] === v}" data-act="setPick" data-k="${k}" data-v="${v}">${sw ? `<div class="sw" style="background:${sw[0]}"><i style="background:${sw[1]}"></i><i style="background:${sw[2]}"></i></div>` : ''}<b>${b}</b><span>${d}</span></button>`).join('');
@@ -398,7 +436,25 @@ ACT.setPick = el => {
 let cur = 'home';
 const NAV = [['Study', [['home', 'Home', 'home'], ['todo', 'To-do', 'todo'], ['learn', 'Learn', 'learn'], ['board', 'Big Archive', 'board'], ['calendar', 'Calendar', 'calendar'], ['notes', 'Notes', 'note']]],
   ['Practice', [['cards', 'Flashcards', 'cards'], ['quiz', 'Quiz', 'quiz'], ['tutor', 'AI Tutor', 'spark'], ['progress', 'Progress', 'chart']]],
-  ['Unwind', [['break', 'Break room', 'cup'], ['shop', 'Shop', 'bag']]], ['App', [['settings', 'Settings', 'sliders']]]];
+  ['Unwind', [['music', 'Music', 'music'], ['break', 'Break room', 'cup'], ['shop', 'Shop', 'bag']]], ['App', [['profile', 'Profile', 'user'], ['settings', 'Settings', 'sliders']]]];
+const pageName = id => NAV.flatMap(([, items]) => items).find(x => x[0] === id)?.[1] || 'Tempo';
+
+// ---------- window frame (desktop app): a title bar painted in the theme's colours; full screen (F11) hides it ----------
+const frame = window.tempoApp?.win;
+if (frame) {
+  const root = document.documentElement, bar = $('#tbar');
+  root.classList.add('tbar'); bar.hidden = false; $('.tb-logo', bar).innerHTML = ember(20, 0);
+  const hex = c => '#' + (c.match(/[\d.]+/g) || [0, 0, 0]).slice(0, 3).map(n => Math.round(+n).toString(16).padStart(2, '0')).join('');
+  let last = '';
+  // The Windows caption buttons are drawn by the OS; they get the bar's colours whenever the theme or UI changes.
+  const paint = () => { const cs = getComputedStyle(bar), bg = hex(cs.backgroundColor), fg = hex(cs.color); if (bg + fg !== last) { last = bg + fg; frame.theme(bg, fg).catch(() => {}); } };
+  new MutationObserver(() => setTimeout(paint, 30)).observe(root, { attributes: true, attributeFilter: ['data-theme', 'data-ui'] });
+  frame.onFull(on => root.classList.toggle('fs', on));
+  frame.full().then(on => root.classList.toggle('fs', on)).catch(() => {});
+  // F11 is caught in the main process; this catches it when the page gets the key first.
+  addEventListener('keydown', e => { if (e.key === 'F11') { e.preventDefault(); frame.full(true); } });
+  paint();
+}
 function chrome() {
   const st = stats(), lv = L.levelOf(S.xp), name = S.profile?.name || 'You', unread = S.notifs.filter(n => !n.read).length;
   const cnt = { cards: S.cards.filter(c => c.due <= st.t).length, todo: S.tasks.filter(x => !x.done && x.due && x.due <= st.t).length }, locked = S.todo.lock;
@@ -407,7 +463,7 @@ function chrome() {
   $('#side').innerHTML = `<div class="logo">${ember(34)}<span class="lbl">Tempo</span><button class="icb sidetog" data-act="navMini" aria-label="${S.settings.navMini ? 'Expand' : 'Collapse'} sidebar" title="${S.settings.navMini ? 'Expand' : 'Collapse'} sidebar">${icon('panel', 18)}</button></div><nav aria-label="Main" style="display:contents">` + NAV.map(([h, items]) => `<div class="nav-h">${h}</div>` + items.map(([id, label, ic]) =>
     `<button class="nav ${cur === id ? 'on' : ''}" ${cur === id ? 'aria-current="page"' : ''} data-act="go" data-p="${id}" title="${label}" aria-label="${label}${cnt[id] ? `, ${cnt[id]} due` : id === 'break' && locked ? ', locked' : ''}">${icon(ic)}<span class="lbl">${label}</span>${extra(id)}</button>`).join('')).join('')
     + `</nav><button class="side-promo" data-act="go" data-p="break"><b>Need a breather?</b><span>Chess, sudoku and a quiet clock are one click away.</span></button>
-    <button class="me" data-act="account" title="Account"><span class="ava">${esc(name[0].toUpperCase())}</span><span class="grow"><b>${esc(name)}</b><br><small class="muted">${user ? esc(user) : 'No account · log in'}</small></span></button>`;
+    <button class="me ${cur === 'profile' ? 'on' : ''}" data-act="go" data-p="profile" title="Your profile"><span class="ava">${esc(name[0].toUpperCase())}</span><span class="grow"><b>${esc(name)}</b><br><small class="muted">${user ? esc(user) : 'No account · log in'}</small></span></button>`;
   const tidy = !!S.settings.tidy[cur], hasAux = !!$('#page .aux');
   $('#top').innerHTML = `<button class="search" data-act="palette" aria-label="Search or jump to">${icon('search', 18)}<span class="lbl2">Search or jump to…</span><kbd>Ctrl K</kbd></button><span class="right"></span>
     <button class="btn sm ghost" data-act="capture" title="Quick capture (C)" aria-label="Quick capture">${icon('plus', 15)}<span class="lbl2">Capture</span></button>
@@ -427,6 +483,7 @@ function go(id, arg) {
   PAGES[id].render(pg, arg);
   void pg.offsetWidth; pg.classList.add('enter');
   chrome(); history.replaceState(null, '', '#' + id);
+  $('#tbT').textContent = pageName(id);
 }
 const refresh = () => { if ($('#app').hidden) return; ['home', 'progress', 'calendar', 'todo'].includes(cur) ? go(cur) : chrome(); };
 // Declutter: "tidy" hides a page's side panels (marked .aux) and is remembered per page; focused mode hides all chrome for this session.

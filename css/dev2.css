@@ -34,7 +34,7 @@
 /* the dock: the sidebar becomes one row of big icons; labels pop up as stickers on hover */
 [data-ui=dev2] #side{position:fixed;z-index:20;left:0;right:0;bottom:16px;margin:0 auto;width:max-content;max-width:calc(100vw - 24px);height:auto;flex-direction:row;align-items:center;gap:4px;padding:8px 10px;border:2.5px solid var(--ink);border-radius:24px;background:var(--panel);box-shadow:6px 6px 0 var(--ink);overflow:visible;animation:dockin .7s var(--punch) backwards .1s} /* backwards: a kept transform would trap the fixed logo inside the dock */
 [data-ui=dev2] #side nav{display:contents}
-[data-ui=dev2] .logo{position:fixed;left:22px;top:16px;padding:0;font:800 22px var(--display);letter-spacing:-.04em}
+[data-ui=dev2] .logo{position:fixed;left:22px;top:calc(16px + var(--tbh));padding:0;font:800 22px var(--display);letter-spacing:-.04em}
 [data-ui=dev2] .logo .ember{animation:float 3.5s ease-in-out infinite}
 [data-ui=dev2] .logo .lbl{display:inline!important}
 [data-ui=dev2] .logo .sidetog,[data-ui=dev2] .side-promo{display:none!important}
@@ -188,3 +188,17 @@
 @media (max-width:1240px){[data-ui=dev2] .home{grid-template-columns:1fr}[data-ui=dev2] .rail{order:0}}
 @media (max-width:1024px){[data-ui=dev2] #top{padding-left:76px}[data-ui=dev2] .logo .lbl{display:none!important}[data-ui=dev2] .nav{width:40px;height:40px}[data-ui=dev2] .nav-h{margin:0 2px}}
 @media (max-width:760px){[data-ui=dev2] #side{overflow-x:auto;justify-content:flex-start}[data-ui=dev2] .nav:hover{transform:none}[data-ui=dev2] #player{margin-right:8px}[data-ui=dev2] #player .tmr .btn{display:none}}
+
+/* ---------- colours: Paper and Rose (Ink is the dark block above) ---------- */
+:root[data-ui=dev2][data-theme=light]{--bg:#f4efe2;--panel:#fffdf6;--panel2:#f6efdd;--soft:#e4d9bf;--p2:#b8e0a8}
+:root[data-ui=dev2][data-theme=rose]{--bg:#fde4ee;--panel:#fff7fa;--panel2:#fbe2ec;--line:#3b1626;--soft:#f2c3d5;--text:#3b1626;--muted:#8a5468;--ink:#3b1626;
+  --accent:#d6336c;--info:#d6336c;--hl:#ff9dbd;--on-hl:#3b1626;--shade:#3b1626;--p3:#ffc0d8;--shadow:6px 6px 0 var(--ink)}
+[data-ui=dev2] #tbar{border-bottom:2.5px solid var(--ink)}
+[data-ui=dev2] #player.np .trk{display:flex;max-width:200px;gap:8px}
+[data-ui=dev2] #player.np .trk .art{width:34px;height:34px}
+[data-ui=dev2] #player.np .trk b{font-size:12.5px}[data-ui=dev2] #player.np .trk span{font-size:11px}
+[data-ui=dev2] .co-side{border:2.5px solid var(--ink);box-shadow:6px 6px 0 var(--ink);max-height:calc(100vh - var(--tbh) - 250px)}
+[data-ui=dev2] .co-pill{border:2px solid var(--ink)}[data-ui=dev2] .co-pill.on{box-shadow:3px 3px 0 var(--ink)}
+[data-ui=dev2] .medal .coin{box-shadow:inset 0 0 0 4px var(--m3),0 0 0 2.5px var(--ink),3px 3px 0 var(--ink)}
+[data-ui=dev2] .pf-ava,[data-ui=dev2] .pf-lv{border-color:var(--ink)}
+[data-ui=dev2] .ck,[data-ui=dev2] .lk-slot,[data-ui=dev2] .pf-nums>div,[data-ui=dev2] .bd-back,[data-ui=dev2] .ask-pic{border:2px solid var(--ink)}

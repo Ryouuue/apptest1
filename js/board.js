@@ -13,7 +13,16 @@
   const ANC = Object.keys(SIDE).map(k => `<i class="anc" data-side="${k}"></i>`).join('');
   let tool = 'hand', color, size = 3, wrap, cv, ctx, world, links, live = null, drag = null, erased = null, linking = null, selLink = null, space = false, raf = 0, undo = [], redo = [], zTop = 1, ro, nro, lastPt = null;
   const urls = [];
-  const B = () => S.board, V = () => S.board.view;
+  // The Archive holds many boards (one per topic or idea); openId is the board on screen, null shows the boards home.
+  let openId = null, snap = '', hq = '';
+  const B = () => S.boards.find(b => b.id === openId), V = () => B().view;
+  function newBoard(title, cover = null) {
+    const b = { id: uid(), title: String(title).trim().replace(/\s+/g, ' ').slice(0, 60) || 'Untitled board', cover, upd: Date.now(), strokes: [], stickies: [], images: [], links: [], view: { x: 0, y: 0, z: 1 } };
+    S.boards.unshift(b); save(); return b;
+  }
+  // Quick capture sticks notes on the open board, else the latest one (made on first use).
+  window.archiveBoard = () => B() || [...S.boards].sort((a, b) => b.upd - a.upd)[0] || newBoard('My archive');
+  window.openBoard = id => { openId = id; go('board'); };
   const toWorld = (cx, cy) => { const r = wrap.getBoundingClientRect(), v = V(); return [(cx - r.left - v.x) / v.z, (cy - r.top - v.y) / v.z]; };
   const item = id => B().stickies.find(s => s.id === id) || B().images.find(s => s.id === id);
 
@@ -144,30 +153,62 @@
   }
 
   // ----- sticky notes -----
-  // A node is a card that grows with its text (markdown, shown rendered until double-clicked). It lives in the stickies list with k: 'node'.
+  // A node is a tiny note: markdown with the Notes extras (callouts, checklists, [[links]], tables, maths, diagrams, pictures),
+  // rendered until double-clicked. It grows with its text up to a cap and then scrolls; the corner grip sets its size (double-click the grip to fit the text again).
+  // Paste straight from Notes: copying rendered blocks there puts their markdown on the clipboard. It lives in the stickies list with k: 'node'.
+  const FMT = [['<b>B</b>', 'Bold', '**'], ['<i>I</i>', 'Italic', '*'], ['<span class="tmk">H</span>', 'Highlight', '=='], ['•', 'Bulleted line', '- ', 'line'], ['☐', 'Checklist line', '- [ ] ', 'line'], ['[[ ]]', 'Link a note', '[[', ']]']];
   function nodeEl(s) {
     const el = document.createElement('div');
-    el.className = 'bnode'; el.dataset.id = s.id; el.tabIndex = 0;
-    el.style.cssText = `left:${s.x}px;top:${s.y}px;width:${s.w}px;--rot:0deg;${s.c ? `--c:${s.c};` : ''}z-index:${s.z || 1}`;
-    el.innerHTML = `<div class="nbar" title="Drag to move">${NODE_C.map(c => `<button style="background:${c || 'var(--panel2)'}" data-c="${c}" aria-label="${c ? 'Colour ' + c : 'No colour'}"></button>`).join('')}<button class="del" aria-label="Delete node">${icon('trash', 15)}</button></div>
-      <div class="nview mdv"></div><div class="ntext" contenteditable="plaintext-only" role="textbox" aria-multiline="true" aria-label="Node text (markdown)" data-ph="Write… markdown works" hidden></div>${ANC}`;
+    el.className = 'bnode' + (s.fh ? ' fixed' : ''); el.dataset.id = s.id; el.tabIndex = 0;
+    el.style.cssText = `left:${s.x}px;top:${s.y}px;width:${s.w}px;${s.fh ? `height:${s.h}px;` : ''}--rot:0deg;${s.c ? `--c:${s.c};` : ''}z-index:${s.z || 1}`;
+    el.innerHTML = `<div class="nbar" title="Drag to move">${NODE_C.map(c => `<button style="background:${c || 'var(--panel2)'}" data-c="${c}" aria-label="${c ? 'Colour ' + c : 'No colour'}"></button>`).join('')}
+      <span class="nfmt" role="toolbar" aria-label="Format">${FMT.map(([h, l], i) => `<button data-f="${i}" title="${l}" aria-label="${l}">${h}</button>`).join('')}</span><button class="del" aria-label="Delete node">${icon('trash', 15)}</button></div>
+      <div class="nview mdv"></div><div class="ntext" contenteditable="plaintext-only" role="textbox" aria-multiline="true" aria-label="Node text (markdown)" data-ph="Write… markdown works, or paste from Notes" hidden></div><i class="grip" title="Drag to resize · double-click to fit the text"></i>${ANC}`;
     const view = $('.nview', el), txt = $('.ntext', el), bar = $('.nbar', el);
-    const show = () => { view.innerHTML = s.t.trim() ? L.md(s.t) : '<p class="muted">Double-click to write</p>'; hydrate(view); };
+    const show = () => {
+      const fns = [];
+      view.innerHTML = s.t.trim() ? L.md(s.t, { defs: L.footDefs(s.t), fns }) + (fns.length ? `<section class="fns"><ol>${fns.map(f => `<li>${f}</li>`).join('')}</ol></section>` : '') : '<p class="muted">Double-click to write</p>';
+      hydrate(view); window.mdEnhance?.(view);
+    };
     el._edit = () => {
-      view.hidden = true; txt.hidden = false; txt.textContent = s.t; txt.focus();
+      view.hidden = true; txt.hidden = false; txt.textContent = s.t; el.classList.add('editing'); txt.focus();
       const r = document.createRange(); r.selectNodeContents(txt); r.collapse(false); getSelection().removeAllRanges(); getSelection().addRange(r);
     };
     txt.oninput = () => { s.t = txt.innerText; save(); };
-    txt.onblur = () => { txt.hidden = true; view.hidden = false; show(); };
+    txt.onblur = () => { txt.hidden = true; view.hidden = false; el.classList.remove('editing'); show(); };
     txt.onkeydown = e => { if (e.key === 'Escape') { e.stopPropagation(); txt.blur(); el.focus(); } };
     view.ondblclick = el._edit;
+    // Ticking a checklist item in the rendered node updates its markdown, like in Notes.
+    view.onclick = e => {
+      const cb = e.target.closest('input[type=checkbox][data-line]'); if (!cb) return;
+      const lines = s.t.split('\n'), i = +cb.dataset.line; if (!/\[[ xX]\]/.test(lines[i] || '')) return;
+      const on = /\[ \]/.test(lines[i]); lines[i] = lines[i].replace(/\[[ xX]\]/, on ? '[x]' : '[ ]'); s.t = lines.join('\n'); save(); show(); on ? sfx.cross() : sfx.tap();
+    };
     el.onkeydown = e => { if (e.target !== el) return; if (e.key === 'Enter') { e.preventDefault(); el._edit(); } else if (e.key === 'Delete') dropItem(s, el); };
+    $('.nfmt', el).onpointerdown = e => e.preventDefault(); // keep the caret in the text while formatting
     bar.onclick = e => {
       const b = e.target.closest('button'); if (!b || el._moved) return;
+      if (b.dataset.f != null) {
+        const [, , pre, post] = FMT[+b.dataset.f], sel = getSelection();
+        if (txt.hidden || !sel.rangeCount || !txt.contains(sel.anchorNode)) return;
+        if (post === 'line') { const r = document.createRange(); r.selectNodeContents(txt); r.setEnd(sel.anchorNode, sel.anchorOffset); const before = r.toString(); document.execCommand('insertText', false, (!before || before.endsWith('\n') ? '' : '\n') + pre); }
+        else document.execCommand('insertText', false, pre + sel.toString() + (post || pre));
+        return sfx.tap();
+      }
       if (b.dataset.c != null) { s.c = b.dataset.c; s.c ? el.style.setProperty('--c', s.c) : el.style.removeProperty('--c'); sfx.tap(); return save(); }
       dropItem(s, el);
     };
-    el.onpointerdown = e => { if (!e.target.closest('.ntext:not([hidden]),.anc,a,input,summary')) dragItem(el, s, e); };
+    const grip = $('.grip', el);
+    grip.onpointerdown = e => {
+      e.preventDefault(); e.stopPropagation();
+      const z = V().z, sx = e.clientX, sy = e.clientY, w0 = el.offsetWidth, h0 = el.offsetHeight;
+      s.fh = true; el.classList.add('fixed');
+      const move = ev => { s.w = Math.round(L.clamp(w0 + (ev.clientX - sx) / z, 160, 1600)); s.h = Math.round(L.clamp(h0 + (ev.clientY - sy) / z, 70, 1600)); el.style.width = s.w + 'px'; el.style.height = s.h + 'px'; drawLinks(); };
+      const up = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', up); save(); };
+      addEventListener('pointermove', move); addEventListener('pointerup', up);
+    };
+    grip.ondblclick = () => { s.fh = false; el.classList.remove('fixed'); el.style.height = ''; sfx.tap(); save(); };
+    el.onpointerdown = e => { if (!e.target.closest('.ntext:not([hidden]),.anc,a,input,summary,.grip,.nfmt')) dragItem(el, s, e); };
     show();
     return el;
   }
@@ -329,12 +370,83 @@
     if (t && !e.ctrlKey && !e.metaKey && !e.altKey) setTool(t);
   };
 
+  // ----- the boards home: one card per board, like the Notes front page -----
+  const items = b => b.stickies.length + b.images.length;
+  // A tiny map of what is on the board, drawn over the doodled cover.
+  function mini(b) {
+    const it = [...b.stickies, ...b.images]; if (!it.length && !b.strokes.length) return '';
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const grow = (x, y) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); };
+    it.forEach(s => { grow(s.x, s.y); grow(s.x + s.w, s.y + (s.h || 90)); });
+    b.strokes.slice(-60).forEach(s => { for (let i = 0; i < s.p.length; i += 8) grow(s.p[i], s.p[i + 1]); });
+    const k = Math.min(280 / Math.max(1, x1 - x0), 120 / Math.max(1, y1 - y0)), ox = 160 - (x1 - x0) * k / 2, oy = 80 - (y1 - y0) * k / 2, X = v => ((v - x0) * k + ox).toFixed(1), Y = v => ((v - y0) * k + oy).toFixed(1);
+    return `<svg class="bmini" viewBox="0 0 320 160" preserveAspectRatio="xMidYMid meet" aria-hidden="true">${b.strokes.slice(-60).map(s => `<polyline points="${Array.from({ length: Math.ceil(s.p.length / 8) }, (_, j) => X(s.p[j * 8]) + ',' + Y(s.p[j * 8 + 1])).join(' ')}" stroke="${s.c}"/>`).join('')}
+      ${it.map(s => `<rect x="${X(s.x)}" y="${Y(s.y)}" width="${Math.max(3, s.w * k).toFixed(1)}" height="${Math.max(3, (s.h || 90) * k).toFixed(1)}" rx="2" class="${'t' in s ? (s.k === 'node' ? 'nd' : 'st') : 'im'}" ${'t' in s && s.k !== 'node' ? `fill="${s.c}"` : ''}/>`).join('')}</svg>`;
+  }
+  const bcard = (b, i) => `<article class="nf-card bcard" style="--i:${i}"><button class="nf-cov" data-act="boardOpen" data-id="${b.id}" tabindex="-1" aria-hidden="true">${coverArt(b)}${b.cover ? '' : mini(b)}</button>
+    <div class="nf-meta"><button class="nf-title" data-act="boardOpen" data-id="${b.id}">${esc(b.title)}</button><small class="muted">${items(b)} item${items(b) === 1 ? '' : 's'}${b.strokes.length ? ` · ${b.strokes.length} sketch${b.strokes.length === 1 ? '' : 'es'}` : ''} · ${ago(b.upd)}</small></div>
+    <button class="icb sm nf-more" data-act="boardMenu" data-id="${b.id}" aria-label="Options for ${esc(b.title)}">${icon('more', 18)}</button></article>`;
+  const bgrid = () => {
+    const f = hq.toLowerCase(), list = S.boards.filter(b => !f || (b.title + ' ' + b.stickies.map(s => s.t).join(' ')).toLowerCase().includes(f)).sort((a, b) => b.upd - a.upd);
+    return list.map(bcard).join('') || `<div class="empty">${hq ? 'No board matches that search.' : 'No boards yet. Add one for each topic or idea.'}</div>`;
+  };
+  function home(root) {
+    root.innerHTML = `<div class="nfront bhome"><section class="nf-top"><div class="nf-hi"><span class="nf-ember">${ember(84)}</span><div><h1>The Big Archive</h1><p class="muted">One board per topic or idea: sketches, sticky notes, nodes, pictures and arrows.</p></div></div></section>
+      <button class="nf-add" data-act="boardNew"><span class="nf-plus">${icon('plus', 26)}</span><span><b>Add a board</b><small>A title, and a cover photo if you like</small></span></button>
+      <section class="nf-list" aria-label="Boards"><div class="nf-head"><h2>Boards <small class="muted">${S.boards.length}</small></h2>
+        <span class="right"><label class="sr" for="bhQ">Search boards</label><input class="inp nf-q" id="bhQ" placeholder="Search boards and notes" value="${esc(hq)}"></span></div>
+      <div class="nf-grid" id="bhGrid">${bgrid()}</div></section></div>`;
+    hydrate(root);
+    $('#bhQ', root).oninput = e => { hq = e.target.value; $('#bhGrid').innerHTML = bgrid(); hydrate($('#bhGrid')); };
+  }
+  ACT.boardOpen = el => window.openBoard(el.dataset.id);
+  ACT.boardHome = () => { if (B() && JSON.stringify(B()) !== snap) B().upd = Date.now(); openId = null; go('board'); };
+  ACT.boardNew = () => {
+    let cover = null;
+    const m = modal(`<h2>Add a board</h2><p class="muted">A fresh canvas for one topic or idea.</p><form novalidate>
+      <label class="f" for="bd-t">Board title</label><input class="inp" id="bd-t" maxlength="60" placeholder="e.g. Biology mind map" autofocus>
+      <label class="f">Cover photo <span class="muted">(optional)</span></label><button type="button" class="tp-cov" id="bdCov">${coverArt({ id: 'preview', title: '?' })}<span>${icon('image', 18)} Choose a photo</span></button>
+      <p class="err" role="alert"></p><div class="foot"><button class="btn" type="submit">${icon('plus', 16)} Add board</button></div></form>`);
+    const t = $('#bd-t', m), cv = $('#bdCov', m);
+    t.oninput = () => { if (!cover) cv.firstElementChild.outerHTML = coverArt({ id: t.value || 'preview', title: t.value || '?' }); };
+    cv.onclick = async () => { try { const id = await pickImage(); if (!id) return; cover = id; cv.firstElementChild.outerHTML = `<img class="cov" data-img="${id}" alt="">`; hydrate(cv); } catch { toast('Could not read that picture.', 'bad'); } };
+    $('form', m).onsubmit = e => {
+      e.preventDefault();
+      if (!t.value.trim()) { $('.err', m).textContent = 'Give the board a title.'; replay(m, 'shake'); return sfx.bad(); }
+      const b = newBoard(t.value, cover); closeModal(); sfx.drop(); window.openBoard(b.id);
+    };
+  };
+  ACT.boardMenu = el => {
+    const b = S.boards.find(x => x.id === el.dataset.id); if (!b) return;
+    const p = popover(el, `<div class="menu"><button data-k="open">${icon('board', 16)} Open</button><button data-k="ren">${icon('note', 16)} Rename</button><button data-k="cov">${icon('image', 16)} ${b.cover ? 'Change' : 'Add'} cover photo</button>${b.cover ? `<button data-k="nocov">${icon('x', 16)} Remove cover</button>` : ''}<button data-k="del" class="bad">${icon('trash', 16)} Delete board</button></div>`);
+    if (!p) return;
+    p.onclick = async e => {
+      const k = e.target.closest('[data-k]')?.dataset.k; if (!k) return; p.remove();
+      if (k === 'open') return window.openBoard(b.id);
+      if (k === 'cov') { try { const id = await pickImage(); if (id) { b.cover = id; save(); go('board'); } } catch { toast('Could not read that picture.', 'bad'); } }
+      if (k === 'nocov') { b.cover = null; save(); go('board'); }
+      if (k === 'ren') {
+        const m = modal(`<h2>Rename board</h2><form novalidate><label class="f" for="br">Title</label><input class="inp" id="br" maxlength="60" value="${esc(b.title)}" autofocus><div class="foot"><button class="btn">Rename</button></div></form>`);
+        $('#br', m).select();
+        $('form', m).onsubmit = ev => { ev.preventDefault(); const v = $('#br', m).value.trim(); if (v) { b.title = v.slice(0, 60); save(); } closeModal(); go('board'); };
+      }
+      if (k === 'del') {
+        const i = S.boards.indexOf(b); S.boards.splice(i, 1); save(); sfx.trash(); go('board');
+        toast(`Deleted “${b.title}”.`, '', ['Undo', () => { S.boards.splice(i, 0, b); save(); if (cur === 'board') go('board'); }]);
+        setTimeout(() => { if (!S.boards.includes(b)) b.images.forEach(m => idb.del(m.id).catch(() => {})); }, 7000); // pictures go after the Undo window
+      }
+    };
+  };
+
   PAGES.board = {
-    flush: true,
-    render(root) {
+    get flush() { return !!B(); },
+    render(root, arg) {
+      if (arg?.id) openId = arg.id;
+      if (!B()) { openId = null; return home(root); }
+      snap = JSON.stringify(B());
       if (!color || color === COLORS[0] || color === COLORS[1]) color = isDark() ? COLORS[0] : COLORS[1];
       root.innerHTML = `<div class="board" data-tool="${tool}"><canvas></canvas><div class="world"><svg class="links" width="1" height="1" aria-hidden="true"></svg></div>
-        <div class="bd-title aux"><h2>Your Big Archive</h2><span class="muted">Drag to move · scroll to zoom · paste or drop pictures</span></div>
+        <div class="bd-title aux"><button class="icb bd-back" data-act="boardHome" title="All boards" aria-label="Back to all boards">${icon('left')}</button><div><h2>${esc(B().title)}</h2><span class="muted">Drag to move · scroll to zoom · paste or drop pictures</span></div></div>
         <div class="tray aux"><div class="pad nodepad" data-k="node" role="button" tabindex="0" aria-label="Add a node card that grows with its text. Drag onto the board or press Enter."><i></i><i></i><i></i></div><small>Node</small><small>Sticky<br>notes</small>${STICKY.map(c => `<div class="pad" style="--c:${c}" data-c="${c}" role="button" tabindex="0" aria-label="Add sticky note. Drag onto the board or press Enter."></div>`).join('')}<small>drag me</small></div>
         <div class="tools" role="toolbar" aria-label="Drawing tools">${TOOLS.map(([t, label, ic, w]) => `<button class="icb" data-tool="${t}" title="${label}" aria-label="${label}">${icon(ic, 22, w || 1.8)}</button>`).join('')}
           <button class="icb" data-h="img" title="Add pictures (or paste / drop them)" aria-label="Add pictures">${icon('image', 22)}</button>
@@ -373,7 +485,11 @@
         const g = e.target.closest('.lnk'); if (!g || tool !== 'hand') return;
         selLink = g.dataset.l; sfx.tap(); drawLinks();
       };
-      wrap.addEventListener('wheel', e => { e.preventDefault(); zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * .0015)); }, { passive: false });
+      wrap.addEventListener('wheel', e => {
+        const sc = !e.ctrlKey && e.target.closest('.bnode .nview, .bnode .ntext');
+        if (sc && sc.scrollHeight > sc.clientHeight + 1) return; // a long node scrolls its own text; Ctrl+wheel still zooms
+        e.preventDefault(); zoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * .0015));
+      }, { passive: false });
       // The arrow tool runs in the capture phase, so pressing on a note starts an arrow instead of moving or editing it.
       wrap.addEventListener('pointerdown', e => {
         if (!LINKERS.has(tool) || e.button || space || e.target.closest('.tools,.tray,.zoom')) return;
@@ -433,6 +549,7 @@
       redraw(); drawLinks();
     },
     leave() {
+      if (B() && wrap?.isConnected && JSON.stringify(B()) !== snap) B().upd = Date.now();
       removeEventListener('keydown', key); removeEventListener('keyup', key); document.removeEventListener('paste', onPaste);
       ro?.disconnect(); nro?.disconnect(); cancelAnimationFrame(raf); raf = 0; live = drag = erased = linking = null; links = null;
       urls.splice(0).forEach(u => URL.revokeObjectURL(u));

@@ -7,15 +7,31 @@
   const curIdx = c => { const i = c.ch.findIndex(x => !x.done); return i < 0 ? c.ch.length : i; };
   const any = a => a[Math.floor(Math.random() * a.length)];
 
+  // The course shelf: a rounded side panel of pill-shaped courses (cover, name, progress ring), scrolling when there are many.
+  let cq = '';
+  const pct = c => (c.ch.length ? Math.round(c.ch.filter(x => x.done).length / c.ch.length * 100) : 0);
+  const pill = (x, on, i) => `<button class="co-pill ${on ? 'on' : ''}" style="--i:${i}" data-act="courseSel" data-c="${x.id}" ${on ? 'aria-current="true"' : ''} title="${esc(x.name)}">
+    <span class="co-cov">${coverArt({ id: x.id + x.name, title: x.name, cover: x.cover })}</span><span class="grow"><b>${esc(x.name)}</b><small class="muted">${x.ch.filter(y => y.done).length} of ${x.ch.length} lessons</small></span>
+    <span class="co-ring" style="--p:${pct(x)}" aria-label="${pct(x)}% done">${pct(x) === 100 ? '🏆' : pct(x) + '%'}</span></button>`;
+  const shelf = c => {
+    const f = cq.toLowerCase(), list = S.courses.filter(x => !f || x.name.toLowerCase().includes(f));
+    return `<aside class="co-side" aria-label="Your courses"><div class="co-h"><b>Courses</b><small class="muted">${S.courses.length}</small>
+      <button class="icb sm right" data-act="courseNew" title="New course" aria-label="New course">${icon('plus', 18)}</button></div>
+      ${S.courses.length > 4 ? `<label class="sr" for="coQ">Find a course</label><input class="inp co-q" id="coQ" placeholder="Find a course" value="${esc(cq)}" autocomplete="off">` : ''}
+      <nav class="co-list" aria-label="Courses">${list.map((x, i) => pill(x, x === c, i)).join('') || '<p class="muted co-none">No course matches.</p>'}
+      <button class="co-pill add" data-act="courseNew"><span class="co-cov">${icon('plus', 20)}</span><span class="grow"><b>New course</b><small class="muted">From a note, with AI, or a checklist</small></span></button></nav></aside>`;
+  };
+  const wire = root => { const qi = $('#coQ', root); if (qi) qi.oninput = () => { cq = qi.value; const at = qi.selectionStart; go('learn'); const n = $('#coQ'); n?.focus(); n?.setSelectionRange(at, at); }; $('.co-pill.on', root)?.scrollIntoView({ block: 'nearest' }); hydrate(root); };
+
   PAGES.learn = {
     render(root) {
       const c = course();
-      if (!c) return void (root.innerHTML = `<div class="ph"><h1>Learn</h1></div><div class="card empty" style="display:grid;justify-items:center;gap:12px;padding:50px">${ember(84)}<h2>No courses yet</h2><p>Turn a note into lessons, or let the tutor write a course.</p><button class="btn" data-act="courseNew">${icon('plus', 18)} New course</button></div>`);
+      if (!c) { root.innerHTML = `<div class="ph"><h1>Learn</h1></div><div class="learn">${shelf(null)}<div class="co-main"><div class="card empty" style="display:grid;justify-items:center;gap:12px;padding:50px">${ember(84)}<h2>No courses yet</h2><p>Turn a note into lessons, or let the tutor write a course.</p><button class="btn" data-act="courseNew">${icon('plus', 18)} New course</button></div></div></div>`; return wire(root); }
       sel = c.id;
       const n = c.ch.length, at = curIdx(c), done = c.ch.filter(x => x.done).length, pts = c.ch.map((_, i) => [50 + OFF[i % 8], 62 + i * ROW]);
       const d = pts.map(([x, y], i) => (i ? `C${pts[i - 1][0]} ${pts[i - 1][1] + ROW / 2} ${x} ${y - ROW / 2} ${x} ${y}` : `M${x} ${y}`)).join(' ');
-      root.innerHTML = `<div class="ph"><h1>Learn</h1>${S.courses.length > 1 ? `<div class="seg" role="tablist" aria-label="Courses">${S.courses.map(x => `<button role="tab" aria-selected="${x === c}" class="${x === c ? 'on' : ''}" data-act="courseSel" data-c="${x.id}">${esc(x.name.slice(0, 22))}</button>`).join('')}</div>` : ''}
-        <button class="btn right" data-act="courseNew">${icon('plus', 18)} New course</button></div>
+      root.innerHTML = `<div class="ph"><h1>Learn</h1><button class="btn right" data-act="courseNew">${icon('plus', 18)} New course</button></div>
+        <div class="learn">${shelf(c)}<div class="co-main">
         <section class="unit"><div class="grow" style="min-width:200px"><small class="mono">COURSE · ${done} OF ${n} LESSONS</small><h2>${esc(c.name)}</h2>
           <div class="pbar" style="margin-top:8px"><div><b style="width:${done / n * 100}%"></b></div><span>${Math.round(done / n * 100)}%</span></div></div>
           ${at < n ? `<button class="btn big" data-act="lessonGo" data-i="${at}">${done ? 'Continue' : 'Start'} ${icon('right')}</button>` : '<span style="font-size:40px" title="Course complete">🏆</span>'}
@@ -26,7 +42,8 @@
           return `${i === at ? `<span class="pstart" style="left:${px}%;top:${py}px" aria-hidden="true">START</span>` : ''}
             <button class="pnode ${st}" style="left:${px}%;top:${py}px;--i:${i}" data-act="lessonGo" data-i="${i}" aria-label="Lesson ${i + 1}: ${esc(x.t)}, ${x.done ? 'done' : st === 'lock' ? 'locked' : 'ready'}">${x.done ? icon('check', 28, 3) : st === 'lock' ? icon('lock', 24) : i + 1}</button>
             <div class="plabel ${left ? 'l' : ''}" style="top:${py}px;${left ? `right:calc(${100 - px}% + 52px)` : `left:calc(${px}% + 52px)`}">${esc(x.t)}<small>${steps ? steps + ' steps' : 'checklist'}${x.best != null ? ' · best ' + x.best + '%' : ''}</small></div>`;
-        }).join('')}</div>`;
+        }).join('')}</div></div></div>`;
+      wire(root);
     },
   };
   ACT.courseSel = el => { sel = el.dataset.c; go('learn'); };

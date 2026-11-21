@@ -18,7 +18,13 @@ ACT.quote = () => { const q = $('#quote'); quoteI = (quoteI + 1) % QUOTES.length
 ACT.addBlock = () => { const p = S.profile; S.events.push({ id: uid(), d: today(), time: String(p.hour).padStart(2, '0') + ':00', title: `${p.pomo}-min focus block`, type: 'study' }); save(); sfx.ok(); go('home'); };
 ACT.nextLesson = () => go('learn');
 // "What should we learn today?": the question goes straight to the AI tutor; chips are shortcuts built from the user's own data.
-ACT.homeAsk = el => { const t = el?.dataset?.q || $('#haIn')?.value.trim(); if (!t) { replay($('#haIn'), 'shake'); return sfx.bad(); } ACT.askTutor(t); };
+ACT.homeAsk = el => {
+  const t = el?.dataset?.q || $('#haIn')?.value.trim(), pic = el?.dataset?.q ? null : pendingPic;
+  if (!t && !pic) { replay($('#haIn'), 'shake'); return sfx.bad(); }
+  ACT.askTutor(t || '', pic);
+};
+// A picture pasted anywhere on Home (outside other text fields) goes into the ask box.
+const homePaste = e => { if (cur === 'home' && !e.target.closest?.('input:not(#haIn),textarea,[contenteditable]')) picPaste(e); };
 function askChips(st) {
   const due = S.cards.filter(c => c.due <= st.t).length, tp = [...(S.topics || [])].sort((a, b) => b.upd - a.upd)[0], task = S.tasks.find(x => !x.done && x.src === 'note');
   return [
@@ -65,7 +71,9 @@ PAGES.home = {
           <p class="muted" style="margin-top:8px;font-size:12px">${day.chest ? '🗝️ Chest opened today. New quests at midnight.' : 'Clear all three for +30 XP and a streak freeze.'}</p></section>
       </div>
       <div class="two pick-row"><section class="card ask-card"><div class="ask-h">${ember(46, m)}<h2>What should we learn today, ${esc(p.name)}?</h2></div>
-        <form class="ask-f" id="homeAsk" novalidate><label class="sr" for="haIn">Ask Ember anything you want to learn</label><input class="inp" id="haIn" maxlength="500" placeholder="e.g. Explain ionic bonding with an example" autocomplete="off"><button class="btn" aria-label="Ask Ember">${icon('send', 18)}</button></form>
+        <form class="ask-f" id="homeAsk" novalidate><label class="sr" for="haIn">Ask Ember anything you want to learn</label><input class="inp" id="haIn" maxlength="500" placeholder="e.g. Explain ionic bonding, or paste a picture (Ctrl V)" autocomplete="off">
+          <button type="button" class="icb ask-pic" data-act="picAdd" title="Add a picture: a worksheet, a diagram, a page of notes (or paste one)" aria-label="Add a picture">${icon('image', 20)}</button><button class="btn" aria-label="Ask Ember">${icon('send', 18)}</button></form>
+        <div class="pic-slot"></div>
         <div class="ask-chips">${askChips(st).map(([l, q, page]) => page ? `<button class="nf-chip" data-act="go" data-p="${page}">${esc(l)}</button>` : `<button class="nf-chip" data-act="homeAsk" data-q="${esc(q)}">${esc(l)}</button>`).join('')}</div>
         <small class="muted">${aiReady() ? 'Answers open in the AI Tutor.' : 'Sign in on the AI Tutor page once; then ask from here.'}</small></section>
       <section class="card aux"><h2>Pick up where you left off</h2><div class="pick-grid">
@@ -81,7 +89,13 @@ PAGES.home = {
       <section class="card"><h2>Recent activity</h2>${feed.length ? feed.map(f => `<div class="act"><span>${f.e}</span><span class="grow">${esc(f.x)}</span><small class="muted">${ago(f.t)}</small></div>`).join('') : '<div class="empty">Your first session will show up here.</div>'}</section>
     </aside></div>`;
     $$('[data-n]', root).forEach(el => countUp(el, +el.dataset.n));
-    $('#homeAsk', root).onsubmit = e => { e.preventDefault(); ACT.homeAsk(); };
+    const ask = $('#homeAsk', root);
+    ask.onsubmit = e => { e.preventDefault(); ACT.homeAsk(); };
+    ask.ondragover = e => { e.preventDefault(); ask.classList.add('over'); };
+    ask.ondragleave = () => ask.classList.remove('over');
+    ask.ondrop = e => { e.preventDefault(); ask.classList.remove('over'); const f = picFrom(e); if (f) attachPic(f); };
+    document.addEventListener('paste', homePaste); paintPic();
     clocks(); paintWeather();
   },
+  leave() { document.removeEventListener('paste', homePaste); },
 };

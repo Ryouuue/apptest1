@@ -76,7 +76,7 @@
       const s = S.settings, acc = user && accounts()[user], login = s.aiMode === 'login';
       root.innerHTML = `<div class="ph"><h1>Settings</h1><button class="btn sm ghost right" data-act="keys">Keyboard shortcuts</button></div><div class="set">
         <section class="card"><h2>Look and feel</h2><label class="f" style="margin-top:0">UI theme</label><div class="pick">${uiCards()}</div>
-          <label class="f">Colour${s.ui === 'dev1' ? ' <span class="muted" style="text-transform:none;letter-spacing:0">· Development 1 keeps its own lavender palette</span>' : ''}</label><div class="pick">${pickCards('theme', THEMES)}</div>
+          <label class="f">Colour <span class="muted" style="text-transform:none;letter-spacing:0">· Default keeps each UI theme’s own palette; the others repaint every UI theme</span></label><div class="pick pick4">${pickCards('theme', THEMES)}</div>
           <div class="row" style="margin-top:18px"><span class="grow"><b>Sound effects</b><br><small class="muted">Taps, sticky-note drops and celebration chimes</small></span><button class="tgl" role="switch" aria-label="Sound effects" aria-checked="${s.sfx}" data-act="sfxTog"></button></div>
           <div class="row" style="margin-top:14px"><span class="grow"><b>Weather location</b><br><small class="muted">${s.geo ? esc(s.geo.name) : 'This device’s location'} · for the clock widget and the rest screen</small></span><button class="btn sm ghost" data-act="wxSet">Change</button></div></section>
         <section class="card"><h2>Account and plan</h2>
@@ -94,9 +94,13 @@
           <div class="row" style="margin-top:14px"><button class="btn sm" data-act="keysSave">Save</button>${login ? '' : '<button class="btn sm ghost" data-act="keysForget">Forget keys</button>'}</div></section>
         <section class="card"><h2>Notes and music</h2><label class="f" style="margin-top:0">Notes home</label><div class="pick">${pickCards('notes', NOTE_HOMES)}</div>
           <div style="margin-top:12px"><button class="btn sm ghost" data-act="vaultConnect">Connect an Obsidian vault folder</button></div>
-          <label class="f" for="spid" style="margin-top:20px">Spotify Client ID ${S.spotify ? '<span class="ok-chip">· connected</span>' : ''}</label><input class="inp" id="spid" value="${esc(s.spotifyId)}" placeholder="From developer.spotify.com/dashboard" autocomplete="off">
-          <p class="muted" style="margin-top:8px;font-size:12px">Create a Spotify app, add <b>${esc(REDIRECT)}</b> as its redirect URI, paste the Client ID, save, then connect. Play and skip need Spotify Premium.</p>
-          <div class="row" style="margin-top:12px"><button class="btn sm" data-act="keysSave">Save</button>${S.spotify ? '<button class="btn sm ghost" data-act="spOff">Disconnect Spotify</button>' : '<button class="btn sm ghost" data-act="spConnect">Connect Spotify</button>'}</div></section>
+          <label class="f" style="margin-top:20px">Spotify ${S.spotify ? '<span class="ok-chip">· connected</span>' : ''}</label>
+          <div class="row">${S.spotify ? '<button class="btn sm" data-act="go" data-p="music">Open Music</button><button class="btn sm ghost" data-act="spOff">Disconnect Spotify</button>' : '<button class="btn sm" data-act="spConnect">Connect Spotify</button>'}</div>
+          <p class="muted" style="margin-top:8px;font-size:12px">${SPOTIFY_ID ? "Sign in on Spotify's page. No keys or setup needed." : 'Add a Spotify Client ID below, then connect.'} Play and skip need Spotify Premium.</p>
+          <details class="sp-own" ${s.spotifyId || !SPOTIFY_ID ? 'open' : ''}><summary class="muted">${SPOTIFY_ID ? 'Use your own Spotify app (optional)' : 'Your Spotify app'}</summary>
+          <label class="sr" for="spid">Your Spotify Client ID</label><input class="inp" id="spid" value="${esc(s.spotifyId)}" placeholder="Client ID from developer.spotify.com/dashboard" autocomplete="off">
+          <p class="muted" style="margin-top:8px;font-size:12px">Add <b>${esc(REDIRECT)}</b> as the app's redirect URI. ${SPOTIFY_ID ? "Leave empty to use Tempo's app." : ''}</p>
+          <div class="row" style="margin-top:10px"><button class="btn sm ghost" data-act="keysSave">Save</button></div></details></section>
         <section class="card" style="grid-column:1/-1"><h2>Your data</h2><p class="muted">Everything is stored on this PC. Back it up before moving to another computer.</p>
           <div class="row" style="margin-top:12px"><button class="btn sm ghost" data-act="exportData">Export backup</button><button class="btn sm ghost" data-act="importData">Import backup</button><button class="btn sm ghost right" style="color:var(--bad)" data-act="resetData">Erase everything</button></div></section></div>`;
     },

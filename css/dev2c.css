@@ -148,3 +148,8 @@
 @keyframes draw{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (max-width:1240px){[data-ui=dev2c] .hero::after,[data-ui=dev2c] .ember-spot::before,[data-ui=dev2c] .hero::before{display:none}}
+
+/* ---------- colours: Paper and Rose (Ink is the dark block above) ---------- */
+:root[data-ui=dev2c][data-theme=light]{--bg:#f5f1e7;--panel:#fffcf5;--panel2:#ede6d5;--line:#ddd4bf;--text:#221d14;--muted:#7a7160}
+:root[data-ui=dev2c][data-theme=rose]{--bg:#fdf0f4;--panel:#fff9fb;--panel2:#fbe5ed;--line:#f1cfdb;--text:#4a1a2b;--muted:#9a6075;--accent:#c2245d;--info:#c2245d;--hl:#ffb3cc;--on-hl:#4a1a2b}
+[data-ui=dev2c] #tbar{background:var(--bg);border-bottom:1px dashed var(--line)}

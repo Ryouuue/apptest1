@@ -39,6 +39,16 @@ ipcMain.handle('notes:reveal', async (e, rel) => {
 });
 ipcMain.handle('boot:info', e => { own(e); return { versions: process.versions, modules: process.moduleLoadList || [], steps, packaged: app.isPackaged, notes: NOTES() }; });
 
+// Window frame: the page draws the title bar; Windows draws the caption buttons in the colours the page sends.
+const BAR_H = 36, isHex = c => /^#[0-9a-f]{6}$/i.test(c);
+ipcMain.handle('win:theme', (e, bg, fg) => { own(e); if (!win || !isHex(bg) || !isHex(fg)) return false; win.setTitleBarOverlay({ color: bg, symbolColor: fg, height: BAR_H }); return true; });
+ipcMain.handle('win:full', (e, toggle) => { own(e); if (toggle && win) win.setFullScreen(!win.isFullScreen()); return !!win?.isFullScreen(); });
+
+// Now playing on this PC (any app, no account). Started with the window; the page asks for the last state when it loads.
+let media = null, nowPlaying = { on: false };
+ipcMain.handle('media:state', e => { own(e); return nowPlaying; });
+ipcMain.handle('media:cmd', (e, c) => { own(e); media?.cmd(String(c)); return true; });
+
 function serve() {
   return new Promise((resolve, reject) => {
     const srv = http.createServer((req, res) => {
@@ -66,9 +76,17 @@ function serve() {
 function open() {
   win = new BrowserWindow({
     width: 1360, height: 860, minWidth: 880, minHeight: 600, backgroundColor: '#05060a', title: 'Tempo', show: !process.env.TEMPO_SMOKE,
+    titleBarStyle: 'hidden', titleBarOverlay: { color: '#16181c', symbolColor: '#f0eee6', height: BAR_H },
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(__dirname, 'preload.js') },
   });
   step('window created');
+  // F11 is full screen: no title bar, no frame. The page hides its bar on the event.
+  win.webContents.on('before-input-event', (e, i) => { if (i.type === 'keyDown' && i.key === 'F11') { e.preventDefault(); win.setFullScreen(!win.isFullScreen()); } });
+  for (const [ev, on] of [['enter-full-screen', true], ['leave-full-screen', false]]) win.on(ev, () => win.webContents.send('win:full', on));
+  if (!media && !process.env.TEMPO_SMOKE) {
+    media = require('./media').startMedia(s => { nowPlaying = s; if (win && !win.isDestroyed()) win.webContents.send('media:state', s); });
+    app.on('will-quit', () => media.stop());
+  }
   // Permissions (folder access for the Obsidian vault, clipboard) go to the app's own pages only, never to a popup or remote site.
   session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(wc.getURL().startsWith(ORIGIN + '/')));
   // The rest screen's visualiser listens to the PC's sound output (Windows loopback). No picker; only the app's own page may ask.

@@ -84,38 +84,65 @@ async function askAI(messages, system = tutorSystem(), prov = S.settings.ai) {
   return out;
 }
 
+// ---------- a picture waiting to go with the next question (Home's ask box and the tutor's composer share it) ----------
+// shortcut: sent pictures stay in IndexedDB after the chat is cleared; sweep unreferenced ids if storage ever matters.
+let pendingPic = null; // { id, url }
+async function attachPic(file) {
+  if (!file?.type?.startsWith('image/')) return toast('That file is not a picture.', 'bad');
+  try {
+    const c = await shrinkImage(file, 1600), blob = await new Promise(r => c.toBlob(r, 'image/jpeg', .85)), id = uid();
+    await idb.put(id, blob); pendingPic = { id, url: URL.createObjectURL(blob) }; paintPic(); sfx.drop();
+    $('#haIn, #chatIn')?.focus();
+  } catch { toast('Could not read that picture.', 'bad'); }
+}
+function paintPic() {
+  for (const el of $$('.pic-slot')) el.innerHTML = pendingPic ? `<span class="pic-chip"><img src="${pendingPic.url}" alt="Picture to send"><span class="muted">Picture ready</span><button type="button" class="icb sm" data-act="picDrop" aria-label="Remove the picture">${icon('x', 14)}</button></span>` : '';
+}
+ACT.picDrop = () => { pendingPic = null; paintPic(); sfx.trash(); };
+ACT.picAdd = () => { const inp = Object.assign(document.createElement('input'), { type: 'file', accept: 'image/*' }); inp.onchange = () => attachPic(inp.files[0]); inp.click(); };
+const picFrom = e => [...((e.clipboardData || e.dataTransfer)?.files || [])].find(f => f.type.startsWith('image/'));
+const picPaste = e => { const f = picFrom(e); if (f) { e.preventDefault(); attachPic(f); } };
+const b64Of = id => idb.get(id).then(b => (b ? new Promise(r => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(',')[1]); fr.readAsDataURL(b); }) : null));
+
 // ---------- tutor ----------
 (() => {
   let busy = false;
-  const bubble = (m, cls = '') => `<div class="msg ${m.role} ${cls} ${m.role === 'assistant' ? 'mdv' : ''}">${m.role === 'assistant' ? L.md(m.content) : esc(m.content)}</div>`;
+  const bubble = (m, cls = '') => `<div class="msg ${m.role} ${cls} ${m.role === 'assistant' ? 'mdv' : ''}">${m.role === 'assistant' ? L.md(m.content) : (m.img ? `<img class="msg-img" data-img="${m.img}" alt="Picture you sent">` : '') + esc(m.content)}</div>`;
   function paint(extra = '') {
     const box = $('#msgs'); if (!box) return;
     const p = S.profile;
     box.innerHTML = (S.chat.length ? S.chat.map(m => bubble(m)).join('') : `<div class="empty" style="margin:auto">${ember(96)}<h2 style="margin:10px 0 4px;color:var(--text)">Ask me anything, ${esc(p.name)}</h2>
       <p>I explain things the ${p.style.toLowerCase()} way.</p><div class="row" style="justify-content:center;margin-top:16px">
       ${['Make me a 7-day study plan', 'Explain my last note simply', 'Give me a memory trick for a hard term', 'Quiz me with 3 questions'].map(c => `<button class="btn sm ghost" data-act="chatChip">${c}</button>`).join('')}</div></div>`) + extra;
-    box.scrollTop = box.scrollHeight;
+    hydrate(box); box.scrollTop = box.scrollHeight;
   }
-  async function send(text) {
-    text = text.trim(); if (!text || busy) return;
+  async function send(text, pic = null) {
+    text = text.trim(); if ((!text && !pic) || busy) return;
+    if (pic) { pendingPic = null; paintPic(); }
     const last = [...S.notes].sort((a, b) => b.upd - a.upd)[0];
-    S.chat.push({ role: 'user', content: text }); save(); busy = true;
+    S.chat.push({ role: 'user', content: text || 'Help me understand this picture.', ...(pic && { img: pic.id }) }); save(); busy = true;
     paint('<div class="msg assistant"><span class="typing"><i></i><i></i><i></i></span></div>');
     try {
       let ctx = S.chat.slice(-20); while (ctx[0]?.role !== 'user') ctx = ctx.slice(1); // providers need the first turn to be the user's
+      // Only the newest picture is sent; older ones are mentioned, so the request stays small.
+      ctx = await Promise.all(ctx.map(async (m, i) => {
+        if (!m.img) return { role: m.role, content: m.content };
+        const data = i === ctx.length - 1 && await b64Of(m.img).catch(() => null);
+        return data ? { role: m.role, content: [{ type: 'image', mime: 'image/jpeg', data }, { type: 'text', text: m.content }] } : { role: m.role, content: m.content + ' [picture]' };
+      }));
       const sys = tutorSystem() + (last ? `\n\nThe student's most recent note, "${last.title}":\n${last.body.slice(0, 4000)}` : '');
       S.chat.push({ role: 'assistant', content: await askAI(ctx, sys) }); S.chat = S.chat.slice(-60); save(); sfx.ok(); paint();
     } catch (e) { paint(`<div class="msg assistant error" role="alert">${esc(e.message)}</div>`); sfx.bad(); }
     busy = false;
   }
-  // From Home's "What should we learn today?": open the tutor and send the question.
-  ACT.askTutor = text => {
+  // From Home's "What should we learn today?": open the tutor and send the question (and the picture, if one is attached).
+  ACT.askTutor = (text, pic) => {
     go('tutor');
     if (!aiReady()) return toast('Sign in to the tutor first, then ask again.', 'bad');
-    send(text);
+    send(text, pic);
   };
   ACT.chatChip = el => { const t = $('#chatIn'); if (!t) return toast('Connect the tutor below to start chatting.'); send(el.textContent); };
-  ACT.chatSend = () => { const t = $('#chatIn'); send(t.value); t.value = ''; t.focus(); };
+  ACT.chatSend = () => { const t = $('#chatIn'); send(t.value, pendingPic); t.value = ''; t.focus(); };
   ACT.chatClear = () => { const old = S.chat; S.chat = []; save(); paint(); toast('Chat cleared.', '', ['Undo', () => { S.chat = old; save(); paint(); }]); };
   ACT.aiProv = el => { S.settings.ai = el.dataset.v; save(); go('tutor'); };
   ACT.aiKey = () => {
@@ -130,13 +157,15 @@ async function askAI(messages, system = tutorSystem(), prov = S.settings.ai) {
       root.innerHTML = `<div class="ph"><h1>AI Tutor</h1><div class="seg" role="tablist" aria-label="AI provider">${AI_PICKS.map(([v, n]) => `<button role="tab" aria-selected="${v === p}" class="${v === p ? 'on' : ''}" data-act="aiProv" data-v="${v}">${n}</button>`).join('')}</div>
         ${S.chat.length ? '<button class="btn sm ghost right" data-act="chatClear">Clear chat</button>' : ''}</div>
         <div class="chat"><div class="msgs" id="msgs" aria-live="polite"></div>
-        ${ready ? `<div class="composer"><textarea id="chatIn" rows="1" placeholder="Ask ${a.name} about anything you are studying…" aria-label="Message"></textarea><button class="btn" data-act="chatSend" aria-label="Send">${icon('send', 18)}</button></div>`
+        ${ready ? `<div class="pic-slot"></div><div class="composer"><button class="icb" data-act="picAdd" title="Add a picture (or paste one)" aria-label="Add a picture">${icon('image', 20)}</button><textarea id="chatIn" rows="1" placeholder="Ask ${a.name} about anything you are studying… paste a picture too" aria-label="Message"></textarea><button class="btn" data-act="chatSend" aria-label="Send">${icon('send', 18)}</button></div>`
         : login ? `<div class="card"><h2>Sign in to chat with ${a.name}</h2><p class="muted" style="margin-bottom:14px">No API key needed. A Puter sign-in window opens; Puter provides the ${AI_PICKS.map(x => x[1]).join(', ')} models. Your questions pass through Puter and usage counts against that account.</p>
           <div class="row"><button class="btn big" data-act="aiSignIn">Sign in ${icon('right')}</button><button class="btn ghost" data-act="aiMode" data-v="key">Use my own API key instead</button></div></div>`
         : `<div class="card"><h2>Connect ${a.name}</h2><p class="muted" style="margin-bottom:12px">${user ? '' : 'Own-key mode needs a Tempo account. '}Paste your ${a.by} API key. It is stored on this PC only and sent only to ${a.by}.</p>
           <div class="row"><label class="sr" for="aikey">${a.name} API key</label><input class="inp grow" id="aikey" type="password" placeholder="${a.name} API key" autocomplete="off" style="min-width:200px"><button class="btn" data-act="aiKey">Connect</button><button class="btn ghost" data-act="aiMode" data-v="login">Sign in instead</button></div></div>`}</div>`;
-      paint();
+      paint(); paintPic();
       const t = $('#chatIn'); if (!t) return;
+      t.onpaste = picPaste;
+      const chat = $('.chat', root); chat.ondragover = e => e.preventDefault(); chat.ondrop = e => { const f = picFrom(e); if (f) { e.preventDefault(); attachPic(f); } };
       t.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ACT.chatSend(); } };
       t.oninput = () => { t.style.height = 'auto'; t.style.height = t.scrollHeight + 'px'; };
       t.focus();
@@ -144,61 +173,109 @@ async function askAI(messages, system = tutorSystem(), prov = S.settings.ai) {
   };
 })();
 
-// ---------- quiz ----------
+// ---------- quiz: a library of saved quizzes grouped by topic. Every quiz you make is kept and can be retaken. ----------
 (() => {
-  let qz = null;
-  const start = (qs, src) => { qz = { qs, src, i: 0, pick: null, checked: false, score: 0, done: false }; };
+  let qz = null, q = '', qn = 5; // running quiz, library search, questions per new quiz
   const page = () => $('#page');
+  const setOf = id => S.qsets.find(x => x.id === id);
+  const best = s => (s.runs.length ? Math.max(...s.runs.map(r => Math.round(r.score / r.total * 100))) : null);
+  function keep(title, topic, src, qs, extra) {
+    const s = { id: uid(), title: String(title).trim().slice(0, 60) || 'Quiz', topic: String(topic || '').trim().slice(0, 40) || 'General', src, qs, made: Date.now(), runs: [], ...extra };
+    S.qsets.unshift(s); save(); return s;
+  }
+  const play = s => { qz = { set: s, qs: L.shuffle([...s.qs]), i: 0, pick: null, checked: false, score: 0, done: false }; go('quiz'); };
 
+  const card = (s, i) => {
+    const b = best(s);
+    return `<article class="nf-card qcard" style="--i:${i}"><button class="nf-cov" data-act="quizPlay" data-id="${s.id}" tabindex="-1" aria-hidden="true">${coverArt(s)}<span class="q-go">${icon('play', 18)}</span></button>
+      <div class="nf-meta"><button class="nf-title" data-act="quizPlay" data-id="${s.id}">${esc(s.title)}</button><small class="muted">${s.qs.length} questions · ${b == null ? 'not taken yet' : `${s.runs.length} run${s.runs.length === 1 ? '' : 's'} · ${ago(s.runs.at(-1).t)}`}</small></div>
+      ${b == null ? '' : `<span class="q-best ${b >= 80 ? 'hi' : ''}" title="Best score">${b}%</span>`}
+      <button class="icb sm nf-more" data-act="quizMenu" data-id="${s.id}" aria-label="Options for ${esc(s.title)}">${icon('more', 18)}</button></article>`;
+  };
+  function lib() {
+    const f = q.toLowerCase(), list = S.qsets.filter(s => !f || (s.title + ' ' + s.topic).toLowerCase().includes(f));
+    if (!list.length) return `<div class="empty q-empty">${S.qsets.length ? 'No quiz matches that search.' : `${ember(64)}<br>No saved quizzes yet. Make one above; it stays here, ready to retake.`}</div>`;
+    const groups = new Map();
+    for (const s of list) groups.set(s.topic, [...(groups.get(s.topic) || []), s]);
+    const last = g => Math.max(...g.map(s => s.runs.at(-1)?.t || s.made));
+    return [...groups].sort((a, b) => last(b[1]) - last(a[1])).map(([t, g]) => `<section class="q-group"><h3><span class="q-dot" style="--h:${hue(t)}" aria-hidden="true"></span>${esc(t)}<small class="muted">${g.length} quiz${g.length === 1 ? '' : 'zes'}</small></h3><div class="nf-grid">${g.map(card).join('')}</div></section>`).join('');
+  }
   function setup(root) {
     const hist = S.quizzes.slice(-5).reverse();
-    root.innerHTML = `<div class="ph"><h1>Quiz</h1></div><div style="max-width:920px"><div class="pick">
-      <button data-act="quizStart" data-src="notes"><span style="font-size:30px">📝</span><b>From my notes</b><span>Offline. Built from bold key terms and definitions in your notes.</span></button>
-      <button data-act="quizStart" data-src="ai"><span style="font-size:30px">✨</span><b>AI-generated</b><span>Any topic, written by ${AI[S.settings.ai].name}. Type the topic below.</span></button>
-      <button data-act="quizStart" data-src="starter"><span style="font-size:30px">🎓</span><b>Study skills</b><span>A warm-up deck that works anywhere.</span></button></div>
-      <div class="card" style="margin-top:18px"><label class="f" for="qtopic" style="margin-top:0">Topic for the AI quiz</label><input class="inp" id="qtopic" maxlength="120" placeholder="e.g. Gossen's laws, cell respiration, the past tense in English"></div>
-      <div class="card" style="margin-top:18px"><h2>Recent scores</h2>${hist.length ? hist.map(h => `<div class="ev"><time>${h.score}/${h.total}</time><div class="pbar grow"><div><b style="width:${h.score / h.total * 100}%"></b></div></div><small class="muted">${esc(h.src)} · ${ago(h.t)}</small></div>`).join('') : '<div class="empty">No quizzes yet. Pick a deck above.</div>'}</div></div>`;
+    root.innerHTML = `<div class="qhome"><section class="q-make card"><div class="q-hi">${ember(58)}<div><h1>Quiz</h1><p class="muted">Make a quiz on any topic. It is saved below, grouped by topic, so you can retake it whenever you like.</p></div></div>
+      <div class="q-form"><div class="grow"><label class="f" for="qtopic">Topic</label><input class="inp" id="qtopic" maxlength="120" placeholder="e.g. Cell respiration, Gossen's laws, the past tense" list="qTopics" autocomplete="off">
+        <datalist id="qTopics">${[...new Set([...S.topics.map(t => t.title), ...S.qsets.map(s => s.topic)])].map(t => `<option value="${esc(t)}">`).join('')}</datalist></div>
+        <div><label class="f">Questions</label><div class="seg" role="group" aria-label="Questions per quiz">${[5, 10, 15].map(n => `<button type="button" class="${n === qn ? 'on' : ''}" aria-pressed="${n === qn}" data-act="quizN" data-n="${n}">${n}</button>`).join('')}</div></div></div>
+      <div class="pick q-src">
+        <button data-act="quizMake" data-src="ai"><span class="e" aria-hidden="true">✨</span><b>With ${AI[S.settings.ai].name}</b><span>Any topic. Type it above.</span></button>
+        <button data-act="quizMake" data-src="notes"><span class="e" aria-hidden="true">📝</span><b>From my notes</b><span>Offline, from your bold key terms. A Notes topic name above narrows it.</span></button>
+        <button data-act="quizMake" data-src="starter"><span class="e" aria-hidden="true">🎓</span><b>Study skills</b><span>A warm-up that works anywhere.</span></button></div></section>
+      <section class="q-lib" aria-label="Your quizzes"><div class="nf-head"><h2>Your quizzes <small class="muted">${S.qsets.length}</small></h2>
+        <span class="right"><label class="sr" for="qQ">Search quizzes</label><input class="inp nf-q" id="qQ" placeholder="Search quizzes and topics" value="${esc(q)}"></span></div><div id="qLib">${lib()}</div></section>
+      <section class="card"><h2>Recent scores</h2>${hist.length ? hist.map(h => `<div class="ev"><time>${h.score}/${h.total}</time><div class="pbar grow"><div><b style="width:${h.score / h.total * 100}%"></b></div></div><small class="muted">${esc(h.src)} · ${ago(h.t)}</small></div>`).join('') : '<div class="empty">No quizzes taken yet.</div>'}</section></div>`;
+    hydrate(root);
+    $('#qQ', root).oninput = e => { q = e.target.value; $('#qLib').innerHTML = lib(); hydrate($('#qLib')); };
   }
   function question(root, still) {
-    const q = qz.qs[qz.i], ok = qz.pick === q.a, last = qz.i === qz.qs.length - 1;
+    const qq = qz.qs[qz.i], ok = qz.pick === qq.a, last = qz.i === qz.qs.length - 1;
     root.innerHTML = `<div class="quiz ${still ? 'still' : ''}"><div class="row" style="flex-wrap:nowrap"><span class="muted">${qz.i + 1} / ${qz.qs.length}</span><div class="pbar grow"><div><b style="width:${(qz.i + (qz.checked ? 1 : 0)) / qz.qs.length * 100}%"></b></div></div>
-      <button class="icb" data-act="quizQuit" aria-label="Quit quiz">${icon('x')}</button></div>
-      <h2 id="qq">${esc(q.q)}</h2><div role="radiogroup" aria-labelledby="qq">${q.o.map((o, k) => `<button class="qo ${qz.checked ? (k === q.a ? 'ok' : k === qz.pick ? 'no' : '') : k === qz.pick ? 'on' : ''}" role="radio" aria-checked="${k === qz.pick}" data-act="quizPick" data-i="${k}" style="--i:${k}" ${qz.checked ? 'disabled' : ''}><span class="key">${k + 1}</span>${esc(o)}</button>`).join('')}</div>
-      ${qz.checked ? `<div class="why ${ok ? 'ok' : 'no'}" role="status"><b>${ok ? 'Correct.' : 'Not quite.'}</b> ${esc(q.why || '')}</div>` : ''}
+      <button class="icb" data-act="quizQuit" aria-label="Quit quiz">${icon('x')}</button></div><small class="mono muted q-of">${esc(qz.set.topic)} · ${esc(qz.set.title)}</small>
+      <h2 id="qq">${esc(qq.q)}</h2><div role="radiogroup" aria-labelledby="qq">${qq.o.map((o, k) => `<button class="qo ${qz.checked ? (k === qq.a ? 'ok' : k === qz.pick ? 'no' : '') : k === qz.pick ? 'on' : ''}" role="radio" aria-checked="${k === qz.pick}" data-act="quizPick" data-i="${k}" style="--i:${k}" ${qz.checked ? 'disabled' : ''}><span class="key">${k + 1}</span>${esc(o)}</button>`).join('')}</div>
+      ${qz.checked ? `<div class="why ${ok ? 'ok' : 'no'}" role="status"><b>${ok ? 'Correct.' : 'Not quite.'}</b> ${esc(qq.why || '')}</div>` : ''}
       <div class="row" style="justify-content:space-between"><span class="muted">Keys 1–4 to answer · Enter to ${qz.checked ? 'continue' : 'check'}</span>
       <button class="btn big ${qz.checked && ok ? 'good' : ''}" id="qgo" data-act="quizCheck" ${qz.pick == null ? 'disabled' : ''}>${qz.checked ? (last ? 'Finish' : 'Next') : 'Check'}</button></div></div>`;
   }
   function result(root) {
-    const pct = Math.round(qz.score / qz.qs.length * 100), C = 2 * Math.PI * 70;
+    const pct = Math.round(qz.score / qz.qs.length * 100), C = 2 * Math.PI * 70, s = qz.set, b = best(s);
+    const record = s.runs.length > 1 && s.runs.slice(0, -1).every(r => Math.round(r.score / r.total * 100) < pct);
     root.innerHTML = `<div class="quiz" style="text-align:center"><div class="ring-w"><svg viewBox="0 0 170 170" width="170" height="170" style="transform:rotate(-90deg)"><circle cx="85" cy="85" r="70" stroke="var(--line)"/>
       <circle cx="85" cy="85" r="70" stroke="${pct >= 60 ? 'var(--good)' : 'var(--accent)'}" stroke-dasharray="${C}" stroke-dashoffset="${C}" style="transition:stroke-dashoffset 1s var(--out)" id="qring"/></svg><b>${qz.score}/${qz.qs.length}</b></div>
-      <h2>${pct === 100 ? 'Flawless.' : pct >= 80 ? 'Strong work.' : pct >= 50 ? 'Solid start.' : 'Good to know where the gaps are.'}</h2>
-      <p class="muted" style="margin-bottom:22px">${pct >= 80 ? 'This material is sticking.' : 'Review the misses, then run it again tomorrow. Spacing does the rest.'}</p>
-      <div class="row" style="justify-content:center"><button class="btn big" data-act="quizQuit">Another quiz</button><button class="btn big ghost" data-act="go" data-p="home">Back home</button></div></div>`;
+      <h2>${record ? 'New best on this quiz.' : pct === 100 ? 'Flawless.' : pct >= 80 ? 'Strong work.' : pct >= 50 ? 'Solid start.' : 'Good to know where the gaps are.'}</h2>
+      <p class="muted" style="margin-bottom:22px">${esc(s.title)} · run ${s.runs.length} · best ${b}%. ${pct >= 80 ? 'This material is sticking.' : 'Review the misses, then retake it tomorrow. Spacing does the rest.'}</p>
+      <div class="row" style="justify-content:center"><button class="btn big" data-act="quizPlay" data-id="${s.id}">${icon('undo', 18)} Retake</button><button class="btn big ghost" data-act="quizQuit">All quizzes</button></div></div>`;
     requestAnimationFrame(() => requestAnimationFrame(() => $('#qring')?.setAttribute('stroke-dashoffset', C * (1 - pct / 100))));
     if (pct >= 80) { confetti(); sfx.win(); }
   }
-  ACT.quizStart = async el => {
-    const src = el.dataset.src;
-    if (src === 'starter') start(L.shuffle(L.STARTER).slice(0, 5), 'Study skills');
-    else if (src === 'notes') {
-      const qs = L.localQuiz(S.notes, 5);
+
+  ACT.quizN = el => { qn = +el.dataset.n; $$('[data-act=quizN]').forEach(b => { b.classList.toggle('on', b === el); b.setAttribute('aria-pressed', b === el); }); sfx.tap(); };
+  ACT.quizMake = async el => {
+    const src = el.dataset.src, inp = $('#qtopic'), topic = inp.value.trim().replace(/\s+/g, ' ');
+    if (src === 'starter') return play(keep('Study skills warm-up', 'Study skills', 'starter', L.shuffle(L.STARTER).slice(0, qn)));
+    if (src === 'notes') {
+      const tp = topic && S.topics.find(t => t.title.toLowerCase() === topic.toLowerCase()), qs = L.localQuiz(tp ? S.notes.filter(n => n.topic === tp.id) : S.notes, qn);
       if (!qs.length) { replay(el, 'shake'); return toast('Not enough material yet. Add 4+ lines with **bold key terms** or “Term: definition” to your notes.', 'bad'); }
-      start(qs, 'My notes');
-    } else {
-      const inp = $('#qtopic'), topic = inp.value.trim();
-      if (!topic) { replay(inp, 'shake'); sfx.bad(); return inp.focus(); }
-      if (!aiReady()) { go('tutor'); return toast('Connect the AI tutor first, then come back for the quiz.'); }
-      const label = el.querySelector('b'); label.textContent = 'Writing your quiz…'; el.disabled = true;
-      try {
-        const out = await askAI([{ role: 'user', content: `Write 5 multiple-choice questions about: ${topic}\nReply with ONLY a JSON array. Each item: {"q": question, "o": [exactly 4 options], "a": index 0-3 of the correct option, "why": one-sentence explanation}.` }],
-          `You write clear, accurate study quizzes for a ${S.profile.style.toLowerCase()} learner. Output valid JSON only, no prose and no code fences.`);
-        const qs = L.validQuiz(JSON.parse(out.match(/\[[\s\S]*\]/)?.[0] || '[]')); // AI output is untrusted: keep only well-formed questions
-        if (!qs.length) throw new Error('The AI reply was not a usable quiz. Try again.');
-        start(qs, topic.slice(0, 30));
-      } catch (e) { label.textContent = 'AI-generated'; el.disabled = false; return toast(e instanceof SyntaxError ? 'The AI reply was not a usable quiz. Try again.' : e.message, 'bad'); }
+      return play(keep(tp ? tp.title : topic || 'From my notes', tp ? tp.title : topic || 'My notes', 'notes', qs));
     }
-    go('quiz');
+    if (!topic) { replay(inp, 'shake'); sfx.bad(); toast('Type a topic first.'); return inp.focus(); }
+    if (!aiReady()) { go('tutor'); return toast('Connect the AI tutor first, then come back for the quiz.'); }
+    const label = el.querySelector('b'), was = label.textContent; label.textContent = 'Writing your quiz…'; el.disabled = true; el.classList.add('busy');
+    try {
+      const out = await askAI([{ role: 'user', content: `Write ${qn} multiple-choice questions about: ${topic}\nReply with ONLY a JSON array. Each item: {"q": question, "o": [exactly 4 options], "a": index 0-3 of the correct option, "why": one-sentence explanation}.` }],
+        `You write clear, accurate study quizzes for a ${S.profile.style.toLowerCase()} learner. Output valid JSON only, no prose and no code fences.`);
+      const qs = L.validQuiz(JSON.parse(out.match(/\[[\s\S]*\]/)?.[0] || '[]')); // AI output is untrusted: keep only well-formed questions
+      if (!qs.length) throw new SyntaxError();
+      const name = topic[0].toUpperCase() + topic.slice(1);
+      play(keep(name, name, 'ai', qs));
+    } catch (e) { if (el.isConnected) { label.textContent = was; el.disabled = false; el.classList.remove('busy'); } toast(e instanceof SyntaxError ? 'The AI reply was not a usable quiz. Try again.' : e.message, 'bad'); }
+  };
+  ACT.quizPlay = el => { const s = setOf(el.dataset.id); if (s) play(s); };
+  ACT.quizMenu = el => {
+    const s = setOf(el.dataset.id); if (!s) return;
+    const p = popover(el, `<div class="menu"><button data-k="play">${icon('play', 16)} Take it</button><button data-k="ren">${icon('note', 16)} Rename</button><button data-k="move">${icon('folder', 16)} Move to a topic</button><button data-k="del" class="bad">${icon('trash', 16)} Delete quiz</button></div>`);
+    if (!p) return;
+    p.onclick = e => {
+      const k = e.target.closest('[data-k]')?.dataset.k; if (!k) return; p.remove();
+      if (k === 'play') return play(s);
+      if (k === 'del') {
+        const i = S.qsets.indexOf(s); S.qsets.splice(i, 1); save(); sfx.trash(); go('quiz');
+        return toast(`Deleted “${s.title}”.`, '', ['Undo', () => { S.qsets.splice(i, 0, s); save(); if (cur === 'quiz') go('quiz'); }]);
+      }
+      const ren = k === 'ren', m = modal(`<h2>${ren ? 'Rename quiz' : 'Move to a topic'}</h2><form novalidate><label class="f" for="qr">${ren ? 'Name' : 'Topic'}</label>
+        <input class="inp" id="qr" maxlength="${ren ? 60 : 40}" value="${esc(ren ? s.title : s.topic)}" list="qrL" autocomplete="off" autofocus><datalist id="qrL">${ren ? '' : [...new Set(S.qsets.map(x => x.topic))].map(t => `<option value="${esc(t)}">`).join('')}</datalist>
+        <div class="foot"><button class="btn">${ren ? 'Rename' : 'Move'}</button></div></form>`);
+      $('#qr', m).select();
+      $('form', m).onsubmit = ev => { ev.preventDefault(); const v = $('#qr', m).value.trim(); if (v) { s[ren ? 'title' : 'topic'] = v.slice(0, ren ? 60 : 40); save(); } closeModal(); go('quiz'); };
+    };
   };
   ACT.quizPick = el => {
     if (qz.checked) return;
@@ -214,7 +291,10 @@ async function askAI(messages, system = tutorSystem(), prov = S.settings.ai) {
       question(page(), true); return $('#qgo').focus();
     }
     if (++qz.i < qz.qs.length) { qz.pick = null; qz.checked = false; return question(page()); }
-    qz.done = true; S.quizzes.push({ d: today(), t: Date.now(), score: qz.score, total: qz.qs.length, src: qz.src }); save();
+    qz.done = true;
+    const run = { t: Date.now(), score: qz.score, total: qz.qs.length };
+    qz.set.runs = [...qz.set.runs, run].slice(-30);
+    S.quizzes.push({ d: today(), ...run, src: qz.set.title.slice(0, 30) }); save();
     result(page()); checkAch(); chrome();
   };
   ACT.quizQuit = () => { qz = null; go('quiz'); };
@@ -225,9 +305,14 @@ async function askAI(messages, system = tutorSystem(), prov = S.settings.ai) {
   });
   PAGES.quiz = {
     render(root, arg) {
-      if (arg?.from) { // "Quiz me on this" from a note; fall back to all notes when one note is too thin
-        const qs = L.localQuiz([arg.from], 5), all = qs.length ? qs : L.localQuiz(S.notes, 5);
-        if (all.length) start(all, qs.length ? arg.from.title.slice(0, 30) : 'My notes'); else toast('That note needs 4+ lines with **bold key terms** first.', 'bad');
+      if (arg?.from) { // "Quiz me on this" from a note: one saved quiz per note, refreshed from the note each time
+        const n = arg.from, qs = L.localQuiz([n], 5);
+        if (!qs.length) toast('That note needs 4+ lines with **bold key terms** first.', 'bad');
+        else {
+          let s = S.qsets.find(x => x.note === n.id);
+          if (s) { s.qs = qs; s.title = n.title.slice(0, 60); save(); } else s = keep(n.title, S.topics.find(t => t.id === n.topic)?.title || 'My notes', 'note', qs, { note: n.id });
+          qz = { set: s, qs: L.shuffle([...s.qs]), i: 0, pick: null, checked: false, score: 0, done: false };
+        }
       }
       if (qz?.done) qz = null;
       qz ? question(root) : setup(root);

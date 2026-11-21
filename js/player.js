@@ -13,7 +13,7 @@ function timerEnd(done) {
     if (done) { sfx.ok(); notify('Break over. Ready for the next block?', '⏰'); }
     return;
   }
-  if (done) { const b = (t.total >= 45 * 60 ? 10 : 5) * 60; Object.assign(t, { mode: 'break', focus: t.total, total: b, left: b, running: true, at: Date.now() }); }
+  if (done) { const b = (t.total >= 45 * 60 ? 10 : 5) * 60; Object.assign(t, { mode: 'break', focus: t.total, total: b, left: b, running: true, at: Date.now() }); spBreakSync(true); }
   else Object.assign(t, { left: t.total, running: false });
   save(); renderPlayer();
   if (mins < 1) return toast('Under a minute, so nothing was logged.');
@@ -33,7 +33,7 @@ function tick() {
 setInterval(tick, 500);
 ACT.tToggle = () => {
   const t = S.timer;
-  if (t.running) { t.left = timerLeft(); t.running = false; } else { t.at = Date.now(); t.running = true; }
+  if (t.running) { t.left = timerLeft(); t.running = false; } else { t.at = Date.now(); t.running = true; if (t.mode === 'focus') spBreakSync(false); }
   save(); renderPlayer();
 };
 ACT.focus = () => ACT.zen();
@@ -69,68 +69,120 @@ const noise = {
 };
 
 // ---------- Spotify remote (Authorization Code + PKCE, no secret) ----------
-// Needs the user's own Spotify app Client ID with this page registered as redirect URI, and Premium for controls.
-const spState = { connected: false, playing: false, title: '', artist: '', art: '' };
+// PKCE needs no client secret, so Tempo ships its own public Client ID: users only sign in. Settings can override it with their own app.
+// The Spotify app must list this page as a redirect URI: http://127.0.0.1:47615/ (desktop app) and the start.bat address. Controls need Premium.
+const SPOTIFY_ID = ''; // Tempo's Spotify app Client ID (public by design under PKCE)
+const spId = () => S.settings.spotifyId || SPOTIFY_ID;
+const SP_SCOPE = 'user-read-playback-state user-modify-playback-state playlist-read-private playlist-read-collaborative';
+const spState = { connected: false, playing: false, title: '', artist: '', art: '', big: '', device: '', uri: '' };
 const REDIRECT = location.origin + location.pathname;
 const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 async function spToken(params) {
-  const r = await fetch('https://accounts.spotify.com/api/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: S.settings.spotifyId, ...params }) });
+  const r = await fetch('https://accounts.spotify.com/api/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: S.spotify?.id || spId(), ...params }) });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(j.error_description || 'Spotify sign-in failed.');
-  S.spotify = { access: j.access_token, refresh: j.refresh_token || S.spotify?.refresh, exp: Date.now() + j.expires_in * 1000 - 60000 };
+  if (!r.ok) { if (params.grant_type === 'refresh_token') { S.spotify = null; save(); } throw new Error(j.error_description || 'Spotify sign-in failed.'); }
+  // id: a refresh token only works with the Client ID that issued it, so it is kept even if Settings changes later.
+  S.spotify = { access: j.access_token, refresh: j.refresh_token || S.spotify?.refresh, exp: Date.now() + j.expires_in * 1000 - 60000, scope: j.scope || S.spotify?.scope || '', id: S.spotify?.id || spId() };
   saveNow();
 }
 ACT.spConnect = () => requireLogin(async () => {
-  if (!S.settings.spotifyId) { go('settings'); return toast('Paste your Spotify Client ID under Integrations first.'); }
+  if (!spId()) { go('settings'); return toast('Add a Spotify Client ID under Notes and music first.'); }
   const ver = b64u(crypto.getRandomValues(new Uint8Array(48)));
   sessionStorage.setItem('sp_ver', ver);
+  sessionStorage.setItem('sp_back', cur);
   const chal = b64u(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ver)));
-  saveNow();
-  location.href = 'https://accounts.spotify.com/authorize?' + new URLSearchParams({ client_id: S.settings.spotifyId, response_type: 'code', redirect_uri: REDIRECT, code_challenge_method: 'S256', code_challenge: chal, scope: 'user-read-playback-state user-modify-playback-state' });
+  S.spotify = null; saveNow();
+  location.href = 'https://accounts.spotify.com/authorize?' + new URLSearchParams({ client_id: spId(), response_type: 'code', redirect_uri: REDIRECT, code_challenge_method: 'S256', code_challenge: chal, scope: SP_SCOPE });
 });
-ACT.spOff = () => { S.spotify = null; spState.connected = false; save(); renderPlayer(); go('settings'); toast('Spotify disconnected.'); };
+ACT.spOff = () => { S.spotify = null; spState.connected = false; save(); renderPlayer(); go(cur === 'music' ? 'music' : 'settings'); toast('Spotify disconnected.'); };
 async function spBoot() {
-  const q = new URLSearchParams(location.search), code = q.get('code'), ver = sessionStorage.getItem('sp_ver');
-  if (q.has('code') || q.has('error')) history.replaceState(null, '', location.pathname + location.hash);
+  const q = new URLSearchParams(location.search), code = q.get('code'), ver = sessionStorage.getItem('sp_ver'), back = sessionStorage.getItem('sp_back');
+  if (q.has('code') || q.has('error')) history.replaceState(null, '', location.pathname + (back ? '#' + back : location.hash));
+  if (q.get('error') === 'access_denied') toast('Spotify sign-in was cancelled.');
   if (code && ver) {
     sessionStorage.removeItem('sp_ver');
-    try { await spToken({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT, code_verifier: ver }); toast('Spotify connected.'); } catch (e) { toast(e.message, 'bad'); }
+    try { await spToken({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT, code_verifier: ver }); toast('Spotify connected.'); if (cur === 'music') go('music'); } catch (e) { toast(e.message, 'bad'); }
   }
+  sessionStorage.removeItem('sp_back');
   spPoll();
 }
-async function sp(path, method = 'GET') {
+const spErr = (msg, status) => Object.assign(new Error(msg), { status });
+// Any Web API call. path is relative to /v1; body is sent as JSON.
+async function sp(path, method = 'GET', body) {
+  if (!S.spotify) throw spErr('Connect Spotify first.', 401);
   if (Date.now() > S.spotify.exp) await spToken({ grant_type: 'refresh_token', refresh_token: S.spotify.refresh });
-  const r = await fetch('https://api.spotify.com/v1/me/player' + path, { method, headers: { authorization: 'Bearer ' + S.spotify.access } });
-  if (r.status === 401) { S.spotify = null; save(); throw new Error('Spotify session expired. Connect again.'); }
-  if (r.status === 403) throw new Error('Spotify Premium is needed for playback controls.');
-  if (r.status === 404) throw new Error('Open Spotify on a device first.');
+  const r = await fetch('https://api.spotify.com/v1' + path, { method, headers: { authorization: 'Bearer ' + S.spotify.access, ...(body && { 'content-type': 'application/json' }) }, body: body && JSON.stringify(body) });
+  const player = path.startsWith('/me/player');
+  if (r.status === 401) { S.spotify = null; save(); throw spErr('Spotify session expired. Connect again.', 401); }
+  if (r.status === 403) throw spErr(player ? 'Spotify Premium is needed for playback controls.' : 'Spotify did not allow this. Reconnect to grant access.', 403);
+  if (r.status === 404) throw spErr(player ? 'Open Spotify on a device first.' : 'Not found on Spotify.', 404);
+  if (r.status === 429) throw spErr('Spotify is busy. Try again in a moment.', 429);
+  if (!r.ok) throw spErr('Spotify did not answer. Try again.', r.status);
   return r.status === 200 ? r.json().catch(() => null) : null;
 }
 async function spPoll() {
   if (!S.spotify || document.hidden || !navigator.onLine || $('#app').hidden) return;
   const was = JSON.stringify(spState);
   try {
-    const j = await sp('');
-    Object.assign(spState, { connected: true, playing: !!j?.is_playing, title: j?.item?.name || '', artist: j?.item?.artists?.map(a => a.name).join(', ') || '', art: j?.item?.album?.images?.at(-1)?.url || '' });
+    const j = await sp('/me/player'), im = j?.item?.album?.images || [];
+    Object.assign(spState, { connected: true, playing: !!j?.is_playing, title: j?.item?.name || '', artist: j?.item?.artists?.map(a => a.name).join(', ') || '', art: im.at(-1)?.url || '', big: (im[1] || im[0])?.url || '', device: j?.device?.name || '', uri: j?.item?.uri || '' });
     if (spState.connected && noise.on) noise.stop();
   } catch (e) { if (!S.spotify) { spState.connected = false; toast(e.message, 'bad'); } }
-  if (was !== JSON.stringify(spState)) renderPlayer();
+  if (was !== JSON.stringify(spState)) { renderPlayer(); if (cur === 'music') PAGES.music.now?.(); }
 }
 setInterval(spPoll, 5000);
-const spDo = async (path, method) => { try { await sp(path, method); setTimeout(spPoll, 450); } catch (e) { toast(e.message, 'bad'); } };
+const spDo = async (path, method) => { try { await sp('/me/player' + path, method); setTimeout(spPoll, 450); } catch (e) { toast(e.message, 'bad'); } };
+// Start tracks or a playlist. With no active device, wake the first device Spotify knows about.
+async function spPlay(body) {
+  try { await sp('/me/player/play', 'PUT', body); }
+  catch (e) {
+    if (e.status !== 404) return toast(e.message, 'bad');
+    const d = (await sp('/me/player/devices').catch(() => null))?.devices?.[0];
+    if (!d) return toast('Open Spotify on your phone or PC, then press play again.', 'bad');
+    try { await sp('/me/player/play?device_id=' + encodeURIComponent(d.id), 'PUT', body); } catch (e2) { return toast(e2.message, 'bad'); }
+  }
+  setTimeout(spPoll, 600);
+}
+// "Pause on breaks": pause when a break starts, resume when the next focus block starts (only if Tempo paused it).
+function spBreakSync(isBreak) {
+  if (!S.settings.spBreak || !spState.connected) return;
+  if (isBreak && spState.playing) { spState.autoPaused = true; spDo('/pause', 'PUT'); }
+  else if (!isBreak && spState.autoPaused) { spState.autoPaused = false; spDo('/play', 'PUT'); }
+}
+ACT.spBreak = () => { S.settings.spBreak = !S.settings.spBreak; save(); PAGES.music.now?.(); toast(S.settings.spBreak ? 'Music will pause on breaks.' : 'Music keeps playing on breaks.'); };
 
-ACT.mPlay = () => { if (spState.connected) return spDo(spState.playing ? '/pause' : '/play', 'PUT'); noise.on ? noise.stop() : noise.start(); renderPlayer(); };
-ACT.mNext = () => { if (spState.connected) return spDo('/next', 'POST'); noise.step(1); renderPlayer(); };
-ACT.mPrev = () => { if (spState.connected) return spDo('/previous', 'POST'); noise.step(-1); renderPlayer(); };
+// ---------- now playing on this PC (desktop app): the song from any app (Spotify, a browser, a player), no account needed ----------
+const sysMedia = { on: false }, deskMedia = window.tempoApp?.media;
+const appName = id => { const k = String(id || '').split('!')[0].replace(/\.exe$/i, '').replace(/_[a-z0-9]{10,}$/i, '').split('.').pop(); return { chrome: 'Chrome', msedge: 'Edge', firefox: 'Firefox', spotify: 'Spotify', zunemusic: 'Media Player', vlc: 'VLC' }[k.toLowerCase()] || k; };
+if (deskMedia) {
+  const set = s => {
+    const was = JSON.stringify(sysMedia);
+    Object.assign(sysMedia, { on: false, title: '', artist: '', art: '', app: '', playing: false, next: false, prev: false }, s);
+    if (JSON.stringify(sysMedia) === was) return;
+    if (sysMedia.playing && noise.on) noise.stop(); // one soundtrack at a time
+    if (S.timer) renderPlayer();
+  };
+  deskMedia.on(set); deskMedia.state().then(set).catch(() => {});
+}
+const useSys = () => !spState.connected && sysMedia.on;
+const sysDo = c => { deskMedia.cmd(c); if (c === 'toggle') { sysMedia.playing = !sysMedia.playing; renderPlayer(); } }; // the next report confirms it
+
+ACT.mPlay = () => { if (spState.connected) return spDo(spState.playing ? '/pause' : '/play', 'PUT'); if (useSys()) return sysDo('toggle'); noise.on ? noise.stop() : noise.start(); renderPlayer(); };
+ACT.mNext = () => { if (spState.connected) return spDo('/next', 'POST'); if (useSys()) return sysDo('next'); noise.step(1); renderPlayer(); };
+ACT.mPrev = () => { if (spState.connected) return spDo('/previous', 'POST'); if (useSys()) return sysDo('prev'); noise.step(-1); renderPlayer(); };
 
 function renderPlayer() {
-  const sp = spState, t = S.timer, playing = sp.connected ? sp.playing : noise.on;
-  $('#player').innerHTML = `<div class="trk">${sp.connected && sp.art ? `<img class="art" src="${esc(sp.art)}" alt="">` : `<div class="art">${playing ? '<div class="eq"><i></i><i></i><i></i></div>' : icon('music')}</div>`}
-    <div class="grow"><b>${esc(sp.connected ? sp.title || 'Nothing playing' : NOISE[noise.i][0])}</b><span class="muted">${esc(sp.connected ? sp.artist || 'Open Spotify on any device' : 'Focus sound · works offline')}</span></div>
-    ${sp.connected ? '' : `<button class="btn sm ghost" data-act="spConnect">${icon('music', 15)} Connect Spotify</button>`}</div>
-    <div class="ctl"><button class="icb" data-act="mPrev" aria-label="Previous">${icon('prev')}</button>
+  const sp = spState, t = S.timer, sys = useSys(), playing = sp.connected ? sp.playing : sys ? sysMedia.playing : noise.on;
+  const art = sp.connected ? sp.art : sys ? sysMedia.art : '';
+  const title = sp.connected ? sp.title || 'Nothing playing' : sys ? sysMedia.title : NOISE[noise.i][0];
+  const sub = sp.connected ? sp.artist || 'Open Spotify on any device' : sys ? [sysMedia.artist, appName(sysMedia.app)].filter(Boolean).join(' · ') : 'Focus sound · works offline';
+  const pl = $('#player'); pl.classList.toggle('np', sp.connected || sys); pl.classList.toggle('on', playing);
+  pl.innerHTML = `<div class="trk">${art ? `<span class="art pic ${playing ? 'spin' : ''}"><img src="${esc(art)}" alt=""></span>` : `<div class="art">${playing ? '<div class="eq"><i></i><i></i><i></i></div>' : icon('music')}</div>`}
+    <div class="grow"><b title="${esc(title)}">${esc(title)}</b><span class="muted">${esc(sub)}</span></div>
+    ${sp.connected || sys ? '' : `<button class="btn sm ghost" data-act="spConnect">${icon('music', 15)} Connect Spotify</button>`}</div>
+    <div class="ctl"><button class="icb" data-act="mPrev" aria-label="Previous" ${sys && !sysMedia.prev ? 'disabled' : ''}>${icon('prev')}</button>
     <button class="playb" data-act="mPlay" aria-label="${playing ? 'Pause' : 'Play'}">${icon(playing ? 'pause' : 'play', 22)}</button>
-    <button class="icb" data-act="mNext" aria-label="Next">${icon('next')}</button></div>
+    <button class="icb" data-act="mNext" aria-label="Next" ${sys && !sysMedia.next ? 'disabled' : ''}>${icon('next')}</button></div>
     <div class="tmr ${t.running ? 'run' : ''} ${t.mode === 'break' ? 'brk' : ''}"><span class="muted">${t.mode === 'break' ? 'Break' : 'Focus'}</span><button class="tmr-t" id="tmrT" data-act="tLen" title="Change focus length" aria-label="Timer, change focus length"></button>
     <button class="btn sm" data-act="tToggle">${t.running ? 'Pause' : 'Start'}</button>
     <button class="icb" data-act="tDone" title="${t.mode === 'break' ? 'Skip break' : 'Finish and log'}" aria-label="${t.mode === 'break' ? 'Skip break' : 'Finish and log session'}">${icon('check')}</button>

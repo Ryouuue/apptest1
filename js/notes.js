@@ -10,9 +10,7 @@
   const topicOf = id => S.topics.find(t => t.id === id), noteOf = id => (id ? S.notes.find(n => n.id === id) : null);
   const kids = (tid, pid = null) => S.notes.filter(n => n.topic === tid && (noteOf(n.parent) ? n.parent : null) === pid).sort((a, b) => (a.ord || 0) - (b.ord || 0));
   const below = (n, d = 0) => (d > 12 ? [] : kids(n.topic, n.id).flatMap(k => [k, ...below(k, d + 1)]));
-  const hue = s => [...String(s)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
   const aiProv = () => (S.settings.notes === 'gemini' ? 'gemini' : S.settings.ai);
-  const autoPlan = () => S.settings.autoPlan !== false;
   const aiOpen = () => S.settings.noteAI !== false;
   const count = tp => S.notes.filter(n => n.topic === tp.id).length;
 
@@ -101,47 +99,65 @@
     toast(`Vault “${dir.name}” connected. ${synced} notes in sync${kept ? `, ${kept} kept from Tempo` : ''}.`);
   });
 
-  // ---------- covers ----------
-  // No photo: a doodled cover generated from the topic id, so every topic looks different but stays the same.
-  function coverHTML(t) {
-    if (t.cover) return `<img class="cov" data-img="${t.cover}" alt="">`;
-    let sd = hue(t.id) * 7919 + 13; const r = () => (sd = sd * 16807 % 2147483647) / 2147483647;
-    const shapes = Array.from({ length: 5 }, (_, i) => {
-      const x = (r() * 300).toFixed(0), y = (r() * 150).toFixed(0), s = 10 + r() * 30;
-      return [`<circle cx="${x}" cy="${y}" r="${s.toFixed(0)}"/>`, `<path d="M${x} ${y}q${s} -${s} ${s * 2} 0t${s * 2} 0t${s * 2} 0"/>`, `<rect x="${x}" y="${y}" width="${s.toFixed(0)}" height="${s.toFixed(0)}" rx="4" transform="rotate(${(r() * 40).toFixed(0)} ${x} ${y})"/>`,
-        `<path d="M${x} ${+y - s}v${s * 2}M${+x - s} ${y}h${s * 2}"/>`][i % 4];
-    }).join('');
-    return `<svg class="cov def" viewBox="0 0 320 160" preserveAspectRatio="xMidYMid slice" aria-hidden="true" style="--h:${hue(t.id)}"><rect class="c0" width="320" height="160"/><g class="c1">${shapes}</g><text class="ci" x="22" y="138">${esc([...t.title][0] || '?')}</text></svg>`;
-  }
-  async function pickImage() {
-    const inp = Object.assign(document.createElement('input'), { type: 'file', accept: 'image/*' });
-    const f = await new Promise(res => { inp.onchange = () => res(inp.files[0]); inp.click(); });
-    if (!f?.type.startsWith('image/')) return null;
-    const c = await shrinkImage(f, 1400), blob = await new Promise(r => c.toBlob(r, 'image/jpeg', .86)), id = uid();
-    await idb.put(id, blob); return id;
-  }
+  const coverHTML = coverArt; // shared with Quiz, Learn and the Big Archive (core.js)
 
-  // ---------- study to-dos from a note (AI, or offline from its headings and key terms) ----------
-  async function planTodos(src, tp, manual) {
-    if (!window.addTask) return;
-    src.planned = true; // set first, so a second trigger while the AI answers does not plan twice
-    let list = [];
+  // ---------- "Add to-do list": Ember splits the note into checkpoints, the student ticks the ones they want, then pushes them ----------
+  // Nothing reaches the to-do list on its own; a long note no longer floods it.
+  const ckLabel = (n, t) => `${n.title.slice(0, 30)} · ${t}`.slice(0, 140);
+  const onList = full => S.tasks.some(x => !x.done && x.t.toLowerCase() === full.toLowerCase());
+  async function ckSuggest(n) {
     if (aiReady(aiProv())) {
       try {
-        const out = await askAI([{ role: 'user', content: `Topic: ${tp.title}\nNote: ${src.title}\n\n${(src.body || '').slice(0, 6000) || '(no text yet: plan from the title)'}\n\nBreak this into 3 to 6 concrete study to-dos a student can tick off, from the basics to the harder parts. Example for ionic bonding: "What an ion is", "How electrons transfer between atoms", "Write the formula of an ionic compound", "Properties of ionic compounds". Reply with ONLY a JSON array of {"t": task under 80 characters}.` }],
-          'You plan study tasks. Output valid JSON only, no prose and no code fences.', aiProv());
-        list = L.validTasks(JSON.parse(out.match(/\[[\s\S]*\]/)?.[0] || '[]')).map(x => x.t);
-      } catch (e) { if (manual) toast(e instanceof SyntaxError ? 'The AI reply was not a usable list. Used the note headings instead.' : e.message, 'bad'); }
+        const out = await askAI([{ role: 'user', content: `Topic: ${topicOf(n.topic)?.title || ''}\nNote: ${n.title}\n\n${(n.body || '').slice(0, 8000) || '(no text yet: plan from the title)'}\n\nBreak this note into 4 to 10 checkpoints: concrete things to learn or do, in order, from the basics to the harder parts. Example for ionic bonding: "What an ion is", "How electrons transfer between atoms", "Write the formula of an ionic compound". Reply with ONLY a JSON array of {"t": checkpoint under 80 characters}.` }],
+          'You turn study notes into clear checkpoints. Output valid JSON only, no prose and no code fences.', aiProv());
+        const list = L.validTasks(JSON.parse(out.match(/\[[\s\S]*\]/)?.[0] || '[]')).map(x => x.t).slice(0, 10);
+        if (list.length) return { list, ai: true };
+      } catch (e) { toast(e instanceof SyntaxError ? 'The AI reply was not a usable list. Used the note headings instead.' : e.message, 'bad'); }
     }
-    if (!list.length) list = L.studySteps(src.body);
-    const added = [];
-    for (const t of list.slice(0, 6)) { try { added.push(addTask(`${src.title}: ${t}`.slice(0, 140), '', '', 'note', src.id)); } catch { /* duplicate or full list */ } }
-    save();
-    if (added.length) { sfx.ok(); toast(`Ember added ${added.length} study to-do${added.length === 1 ? '' : 's'} for “${src.title}”.`, '', ['Undo', () => { S.tasks = S.tasks.filter(x => !added.includes(x)); save(); refresh(); }]); }
-    else if (manual) toast('Those to-dos are already on your list.');
+    return { list: L.studySteps(n.body, 10), ai: false };
   }
-  // Leaving a note that has real content for the first time plans its to-dos once (checked after navigation settles).
-  const leaveNote = n => setTimeout(() => { if (n && (cur !== 'notes' || view?.note !== n.id) && autoPlan() && !n.planned && L.plain(n.body).length >= 120 && S.notes.includes(n)) planTodos(n, topicOf(n.topic)); }, 50);
+  async function checkpoints(n) {
+    if (doc?.ed) commit();
+    const m = modal(`<h2>${icon('todo', 22)} Add to your to-do list</h2><p class="muted ck-sub">Ember is reading “${esc(n.title)}” and marking the checkpoints…</p>
+      <div class="ck-bar"><button type="button" class="nf-chip" data-k="all" disabled>Select all</button><span class="muted ck-n" role="status">0 selected</span>
+        <label class="ck-due right"><span class="muted">Due</span><input class="inp" type="date" id="ckDue" aria-label="Due date for the pushed tasks"></label></div>
+      <ol class="ck-list" aria-label="Checkpoints">${'<li class="ck sk" aria-hidden="true"><i></i><b></b></li>'.repeat(5)}</ol>
+      <button type="button" class="nf-chip ck-add" data-k="add">${icon('plus', 14)} Add your own</button>
+      <div class="foot"><button type="button" class="btn ghost" data-k="again" disabled>${icon('undo', 16)} Ask again</button><button type="button" class="btn" data-k="push" disabled>${icon('pushup', 17)} Push to to-do list</button></div>`, 'wide ck-modal');
+    const list = $('.ck-list', m), sub = $('.ck-sub', m);
+    const row = (t, i) => { const full = ckLabel(n, t), have = onList(full); return `<li class="ck ${have ? 'have' : ''}" style="--i:${i}"><label class="ck-tick"><input type="checkbox" ${have ? 'checked disabled' : ''} aria-label="Push “${esc(t)}”"><span aria-hidden="true">${icon('check', 15, 3)}</span></label>
+      <input class="ck-t" value="${esc(t)}" maxlength="100" aria-label="Checkpoint ${i + 1}">${have ? '<small class="ck-have">on your list</small>' : ''}</li>`; };
+    const picks = () => $$('.ck:not(.have)', list).filter(li => $('input[type=checkbox]', li).checked && $('.ck-t', li).value.trim());
+    const sync = () => {
+      const k = picks().length, free = $$('.ck:not(.have) input[type=checkbox]', list);
+      $('.ck-n', m).textContent = `${k} selected`;
+      const push = $('[data-k=push]', m); push.disabled = !k; push.innerHTML = `${icon('pushup', 17)} Push ${k || ''} to to-do list`;
+      $('[data-k=all]', m).textContent = free.length && free.every(c => c.checked) ? 'Clear all' : 'Select all';
+    };
+    const load = async () => {
+      $$('button[data-k]', m).forEach(b => (b.disabled = b.dataset.k !== 'add'));
+      const r = await ckSuggest(n); if (!m.isConnected) return;
+      sub.textContent = r.list.length ? `${r.ai ? 'Ember split the note into checkpoints.' : 'Made from the note’s headings and key terms (AI is off).'} Tick what you need, then push.` : 'No checkpoints found yet. Add your own below.';
+      list.innerHTML = r.list.map(row).join(''); $$('button[data-k]', m).forEach(b => (b.disabled = false)); sync(); sfx.pick();
+    };
+    list.onchange = e => { if (e.target.matches('input[type=checkbox]')) { e.target.closest('.ck').classList.toggle('on', e.target.checked); sfx.tap(); sync(); } };
+    list.oninput = sync;
+    m.onclick = e => {
+      const k = e.target.closest('button[data-k]')?.dataset.k; if (!k) return;
+      if (k === 'again') return load();
+      if (k === 'all') { const free = $$('.ck:not(.have) input[type=checkbox]', list), on = !free.every(c => c.checked); free.forEach(c => { c.checked = on; c.closest('.ck').classList.toggle('on', on); }); sfx.pick(); return sync(); }
+      if (k === 'add') { list.insertAdjacentHTML('beforeend', row('', list.children.length)); const li = list.lastElementChild; $('input[type=checkbox]', li).checked = true; li.classList.add('on'); $('.ck-t', li).focus(); return sync(); }
+      if (k === 'push') {
+        const due = $('#ckDue', m).value, added = [];
+        for (const li of picks()) { try { added.push(addTask(ckLabel(n, $('.ck-t', li).value.trim()), due, '', 'note', n.id)); } catch { /* duplicate or the list is full */ } }
+        save(); closeModal();
+        if (!added.length) return toast('Those checkpoints are already on your list.');
+        sfx.drop(); toast(`Pushed ${added.length} checkpoint${added.length === 1 ? '' : 's'} to your to-do list.`, '', ['Open', () => go('todo')]);
+      }
+    };
+    $('.ck-add', m).disabled = false;
+    load();
+  }
 
   // ---------- front page ----------
   const card = (t, i) => `<article class="nf-card" style="--i:${i}"><button class="nf-cov" data-act="topicOpen" data-id="${t.id}" tabindex="-1" aria-hidden="true">${coverHTML(t)}</button>
@@ -192,7 +208,6 @@ Reply with ONLY JSON, no code fences: {"title": "short topic title", "notes": [{
     if (!aiReady(aiProv())) { // offline: a line becomes a topic, a long paste becomes its first note
       const long = text.length > 280, tp = newTopic(long ? text.split('\n')[0].slice(0, 60) : text);
       newNote(tp.id, long ? 'Pasted notes' : tp.title, long ? text : '');
-      if (autoPlan()) planTodos({ id: '', title: tp.title, body: long ? text : '' }, tp);
       sfx.ok(); return openTopic(tp);
     }
     busy(true, 'Ember is writing your notes…');
@@ -205,8 +220,6 @@ Reply with ONLY JSON, no code fences: {"title": "short topic title", "notes": [{
       const add = (arr, parent) => arr.forEach(x => { const n = newNote(tp.id, x.title, x.body, parent); add(x.kids, n.id); });
       add(o.notes, null);
       sfx.win(); addXp(10);
-      const first = kids(tp.id)[0];
-      if (autoPlan() && first) planTodos(first, tp);
       openTopic(tp);
     } catch (e) { busy(false, e instanceof SyntaxError ? 'Ember’s reply was not usable notes. Try again.' : e.message); sfx.bad(); }
   }
@@ -241,7 +254,7 @@ Reply with ONLY JSON, no code fences: {"title": "short topic title", "notes": [{
       e.preventDefault();
       if (!t.value.trim()) { $('.err', m).textContent = 'Give the topic a title.'; replay(m, 'shake'); return sfx.bad(); }
       const tp = newTopic(t.value, cover); newNote(tp.id, tp.title, '');
-      closeModal(); sfx.drop(); if (autoPlan()) planTodos({ id: '', title: tp.title, body: '' }, tp);
+      closeModal(); sfx.drop();
       if (cur === 'notes' && !view) { go('notes'); $('.nf-card')?.classList.add('fresh'); }
     };
   };
@@ -333,17 +346,18 @@ Reply with ONLY JSON, no code fences: {"title": "short topic title", "notes": [{
         + TB('edCallout', icon('callout', 17), 'Insert callout') + TB('edDivider', icon('divider', 17), 'Insert divider') + TB('edFoot', icon('footnote', 17), 'Insert footnote'))}
       ${g(TB('edLook', icon('layout', 17) + '<span class="tbl">Template</span>', 'Template, paper and dividers'))}
       ${g(TB('edRecall', icon(recall ? 'eye' : 'eyeoff', 17) + `<span class="tbl" id="tbRecall">Recall</span>`, 'Recall mode: hide key terms and test yourself', `aria-pressed="${recall}"`) + TB('edStudy', icon('learn', 17) + '<span class="tbl">Study</span>', 'Study this note'))}
+      ${g(`<button class="tb tb-todo" data-act="edTodo" title="Pick checkpoints from this note and push them to your to-do list">${icon('todo', 17)}<span class="tbl">Add to-do list</span></button>`)}
     </div>`;
   }
-  const QUICK = [['sum', 'Summarise'], ['eli', 'Explain simply'], ['cards', 'Make flashcards', 1], ['todo', 'Break into to-dos', 1], ['subs', 'Suggest sub-notes'], ['quiz', 'Quiz me', 1]];
+  ACT.edTodo = () => { if (doc?.n) checkpoints(doc.n); };
+  const QUICK = [['sum', 'Summarise'], ['eli', 'Explain simply'], ['cards', 'Make flashcards', 1], ['todo', 'Add to-do list', 1], ['subs', 'Suggest sub-notes'], ['quiz', 'Quiz me', 1]];
   function aiPanel(tp, n) {
     const ready = aiReady(aiProv());
     return `<div class="ai-h"><button class="icb" data-act="aiToggle" aria-label="Hide the assistant" title="Hide">${icon('chevR', 20, 2.2)}</button><span class="ai-e">${ember(30)}</span><div><b>Assistant</b><small class="muted">${n ? 'Reading “' + esc(n.title) + '”' : 'Ask about ' + esc(tp.title)}</small></div></div>
       <div class="ai-quick">${QUICK.map(([k, l, off]) => `<button class="nf-chip" data-act="aiQuick" data-k="${k}" ${n ? '' : 'disabled'} ${!ready && !off ? 'disabled title="Sign in to the AI tutor first"' : ''}>${l}</button>`).join('')}</div>
       <div class="ai-msgs" id="aiMsgs" aria-live="polite"></div>
       ${ready ? `<form class="ai-comp" id="aiComp"><label class="sr" for="aiIn">Ask the assistant</label><textarea id="aiIn" rows="1" placeholder="Ask about this note…"></textarea><button class="btn sm" aria-label="Send">${icon('send', 16)}</button></form>`
-        : `<div class="ai-off"><p class="muted">Sign in to the AI tutor to chat about your notes. Flashcards and to-dos work without it.</p><button class="btn sm" data-act="aiSignIn">Sign in</button></div>`}
-      <label class="ai-auto"><input type="checkbox" id="aiAuto" ${autoPlan() ? 'checked' : ''}> Add study to-dos for new notes</label>`;
+        : `<div class="ai-off"><p class="muted">Sign in to the AI tutor to chat about your notes. Flashcards and to-dos work without it.</p><button class="btn sm" data-act="aiSignIn">Sign in</button></div>`}`;
   }
   function paintMsgs() {
     const box = $('#aiMsgs'), tp = topicOf(view?.topic); if (!box || !tp) return;
@@ -384,7 +398,6 @@ Reply with ONLY JSON, no code fences: {"title": "short topic title", "notes": [{
       t.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); comp.requestSubmit(); } };
       t.oninput = () => { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 160) + 'px'; };
     }
-    $('#aiAuto', root).onchange = e => { S.settings.autoPlan = e.target.checked; save(); };
     if (n) openDoc(n);
   }
 
@@ -755,7 +768,7 @@ Reply with ONLY JSON, no code fences: {"title": "short topic title", "notes": [{
   }
   ACT.edStudy = el => {
     const n = doc?.n; if (!n) return;
-    const p = popover(el, `<div class="menu"><button data-k="quiz">❓ Quiz me on this note</button><button data-k="cards">🃏 Make flashcards</button><button data-k="map">${icon('tree', 16)} Mind map</button><button data-k="todo">${icon('todo', 16)} Break into to-dos</button></div>`);
+    const p = popover(el, `<div class="menu"><button data-k="quiz">❓ Quiz me on this note</button><button data-k="cards">🃏 Make flashcards</button><button data-k="map">${icon('tree', 16)} Mind map</button><button data-k="todo">${icon('todo', 16)} Add to-do list</button></div>`);
     if (!p) return;
     p.onclick = e => { const k = e.target.closest('[data-k]')?.dataset.k; if (!k) return; p.remove(); studyDo(k, n); };
   };
@@ -763,7 +776,7 @@ Reply with ONLY JSON, no code fences: {"title": "short topic title", "notes": [{
     if (doc?.ed) commit();
     if (k === 'quiz') return go('quiz', { from: n });
     if (k === 'map') return mindmap(n.title, n.body);
-    if (k === 'todo') return planTodos(n, topicOf(n.topic), true);
+    if (k === 'todo') return checkpoints(n);
     if (k === 'cards') return makeCards(n);
   }
   async function makeCards(n) {
@@ -901,6 +914,7 @@ Reply with ONLY JSON, no code fences: {"title": "short topic title", "notes": [{
   const scripts = {};
   const loadScript = src => (scripts[src] ||= new Promise((res, rej) => { const s = Object.assign(document.createElement('script'), { src }); s.onload = res; s.onerror = () => { delete scripts[src]; s.remove(); rej(new Error('offline')); }; document.head.append(s); }));
   const mmCache = new Map();
+  window.mdEnhance = root => enhance(root); // Big Archive nodes render notes the same way
   async function enhance(root) {
     const math = $$('.math[data-tex]', root), code = $$('pre code[class*="language-"]', root), mm = $$('.mermaid-src', root);
     if (math.length) try { await Promise.all([loadScript(LIB.katex), loadSheet(LIB.katexCss)]); for (const el of math) try { katex.render(el.dataset.tex, el, { displayMode: el.classList.contains('blk'), throwOnError: false }); } catch { /* bad TeX stays as text */ } } catch { /* offline */ }
@@ -1018,6 +1032,14 @@ Reply with ONLY JSON, no code fences: {"title": "short topic title", "notes": [{
   };
 
   // ---------- page ----------
+  // Copying across rendered blocks copies their markdown, so a paste into a Big Archive node (or another note) keeps the formatting.
+  document.addEventListener('copy', e => {
+    if (cur !== 'notes' || !doc || doc.ed) return;
+    const sel = getSelection(), body = $('#docBody'); if (!sel?.rangeCount || sel.isCollapsed || !body?.contains(sel.anchorNode)) return;
+    const r = sel.getRangeAt(0), hit = $$('#docBody .blk[data-i]', body).filter(b => r.intersectsNode(b) && +b.dataset.i >= 0);
+    if (!hit.length || (hit.length === 1 && sel.toString().trim().length < hit[0].textContent.trim().length)) return; // part of one block stays plain text
+    e.preventDefault(); e.clipboardData.setData('text/plain', hit.map(b => doc.bl[+b.dataset.i].t).join('\n\n'));
+  });
   addEventListener('keydown', e => {
     if (cur !== 'notes' || !doc || $('#app').hidden || $('.scrim:not(.out)') || $('.ngraph')) return;
     const mod = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
@@ -1034,7 +1056,7 @@ Reply with ONLY JSON, no code fences: {"title": "short topic title", "notes": [{
     },
     leave() {
       if (doc?.ed) commit();
-      leaveNote(doc?.n); doc = null; wlClose(); $('.ngraph')?.remove();
+      doc = null; wlClose(); $('.ngraph')?.remove();
       $('#app').classList.remove('notesfull');
     },
   };

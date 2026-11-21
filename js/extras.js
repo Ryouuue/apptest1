@@ -58,13 +58,14 @@ ACT.capture = () => {
     if (!t) { $('.err', m).textContent = 'Type something first.'; replay(m, 'shake'); return sfx.bad(); }
     if (kind === 'note') S.notes.push({ id: uid(), title: t.split('\n')[0].slice(0, 50), body: t, upd: Date.now() });
     else {
-      const v = S.board.view, n = S.board.stickies.length;
-      S.board.stickies.push({ id: uid(), x: Math.round((260 + n % 5 * 34 - v.x) / v.z), y: Math.round((150 + n % 5 * 34 - v.y) / v.z), w: 190, h: 170, c: '#fde68a', t, r: +(Math.random() * 5 - 2.5).toFixed(1), z: Math.max(0, ...S.board.stickies.map(s => s.z || 1)) + 1 });
+      const b = archiveBoard(), v = b.view, n = b.stickies.length;
+      b.stickies.push({ id: uid(), x: Math.round((260 + n % 5 * 34 - v.x) / v.z), y: Math.round((150 + n % 5 * 34 - v.y) / v.z), w: 190, h: 170, c: '#fde68a', t, r: +(Math.random() * 5 - 2.5).toFixed(1), z: Math.max(0, ...b.stickies.map(s => s.z || 1)) + 1 });
+      b.upd = Date.now();
     }
     save(); closeModal(); sfx.drop(); checkAch();
-    const page = kind === 'note' ? 'notes' : 'board';
-    if (cur === page) go(page);
-    toast(kind === 'note' ? 'Saved as a note.' : 'Stuck on the Big Archive.', '', cur === page ? null : ['Open', () => go(page)]);
+    const page = kind === 'note' ? 'notes' : 'board', open = () => (kind === 'note' ? go(page) : openBoard(archiveBoard().id));
+    if (cur === page) open();
+    toast(kind === 'note' ? 'Saved as a note.' : 'Stuck on the Big Archive.', '', cur === page ? null : ['Open', open]);
   };
   $('.foot', m).onclick = e => { const b = e.target.closest('button'); if (b) put(b.dataset.k); };
   $('#cap', m).onkeydown = e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); put('sticky'); } };
